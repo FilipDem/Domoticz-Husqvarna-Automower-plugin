@@ -41,6 +41,10 @@ On the developer site, you will find now a client_id (or application_id) and a c
   * to one hour when the automower is off (eg during winter)
   * to three hours during night (between 10pm and 5am)
   
+## Automation ideas
+* You can link possible weather sensors with the Husqvarna mower. Eg. if it is start raining, the Husqvarna mower can be stopped mowing and return return to its charging station.
+* The device 'State' can be used to check if there has been an error occured; in case of error a notification could be sent.
+
 Success!
 
 **Don't forget a small gift by using the donation button...**
