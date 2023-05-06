@@ -6,6 +6,20 @@ https://developer.husqvarnagroup.cloud/applications
 
 """
 
+try:
+    import Domoticz
+    def log(msg=""):
+        if len('{}'.format(msg)) <= 5000:
+            Domoticz.Debug(">> {}".format(msg))
+        else:
+            Domoticz.Debug(">> (in several blocks)")
+            string = [msg[i:i+5000] for i in range(0, len('{}'.format(msg)), 5000)]
+            for k in string:
+                Domoticz.Debug(">> {}".format(k))
+except:
+    def log(msg=""):
+        print(msg)
+
 import requests
 import time
 from datetime import datetime, timedelta
@@ -16,6 +30,7 @@ URL_TOKEN_REQUEST = 'https://api.authentication.husqvarnagroup.dev/v1/oauth2/tok
 URL_BASE_API = 'https://api.amc.husqvarna.dev/v1/'
 URL_GET_MOWERS = '{}{}'.format(URL_BASE_API, 'mowers')
 API_CALL_DELAY = 2
+API_TIMEOUT = 10 #seconds
 
 ACTION_PARKNEXTSCHEDULE = 'ParkUntilNextSchedule'
 ACTION_PARKFURTHERNOTICE = 'ParkUntilFurtherNotice'
@@ -180,16 +195,20 @@ ErrorCodes = {
 class Husqvarna():
 
     def __init__(self, client_id, client_secret):
+        self.mowers = []
         self.client_id = client_id
         self.client_secret = client_secret
         self.access_token = None
-        self.access_token_expiration = None
-        self.timestamp_last_update_mower_list = None
+        self.access_token_expiration = datetime(2000,1,1)
+        self.timestamp_last_update_mower_list = datetime(2000,1,1)
         self.s = requests.Session()
         self.s.verify = False
         self.error = None
         self.api_limit_reached = False
-        self._get_access_token()
+        
+    def __bool__(self):
+        log('Return value on creation of Husqvarna object')
+        return self._get_access_token()
                 
     def get_mowers(self):
         if self._check_access_token_and_renew():
@@ -219,6 +238,22 @@ class Husqvarna():
     def action_Start(self, mower_name, duration=60):
         return self._send_action_to_mower(mower_name, ACTION_START, duration=duration)
 
+    def set_headlight(self, mower_name, light):
+        if not self._check_access_token_and_renew():
+            return False
+
+        mower_id = self._find_id_from_name(mower_name)
+        if mower_id:
+            if light:
+                json = { 'data': {'type': 'settings', 'attributes': {'headlight': {'mode': 'ALWAYS_ON'} } } } 
+            else:
+                json = { 'data': {'type': 'settings', 'attributes': {'headlight': {'mode': 'ALWAYS_OFF'} } } } 
+            self.s.headers.update( { 'Content-Type': 'application/vnd.api+json' } )
+            action = self._http_with_retry(POST, '{}/{}/settings'.format(URL_GET_MOWERS, mower_id), json, mower_name=mower_name)
+            if action:
+                return True
+        return False
+
     def are_all_mowers_off(self):
         status = True
         for mower in self.mowers:
@@ -247,20 +282,18 @@ class Husqvarna():
 
     def _get_access_token(self):
         self.s.headers.clear()
+        self.s.headers.update({'Content-Type': 'application/x-www-form-urlencoded'})
         data = { 'grant_type': 'client_credentials',
                  'client_id' : self.client_id,
                  'client_secret': self.client_secret,
                  'token_endpoint': URL_TOKEN_REQUEST
                }
-        headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-        time.sleep(API_CALL_DELAY) #Avoid doing more than 1 call per second
-        r = self.s.post(URL_TOKEN_REQUEST, data=data, headers=headers, verify=False)
+        self.access_token = self._http_with_retry(POST, URL_TOKEN_REQUEST, post_data=data)
 
         # Return if authenticated
         status = False
-        if r.status_code in [200, 201]:
+        if self.access_token:
             self.error = None
-            self.access_token = r.json()
             self.access_token_expiration = datetime.now() + timedelta(seconds=self.access_token['expires_in']) - timedelta(seconds=600)
             self.s.headers.update( {
                 'x-api-key': self.client_id,
@@ -269,21 +302,24 @@ class Husqvarna():
                 'accept': 'application/vnd.api+json'
             } )
             status = True
-        elif r.status_code >= 400:
-            self.error = '(Http error: {}) Bad or unauthorized authentication request (url: {}).'.format(r.status_code, URL_TOKEN_REQUEST)
+            log('New access token generated!!! Expiration: {} - Type: {} - Token: ...{}'.format(datetime.now() + timedelta(seconds=self.access_token['expires_in']), self.access_token['token_type'], self.access_token['access_token'][-20:]))
+        else:
+            self.error = 'Bad or unauthorized authentication request (url: {}).'.format(URL_TOKEN_REQUEST)
 
         return status
 
     def _check_access_token_and_renew(self):
-        if not self.access_token_expiration or datetime.now() > self.access_token_expiration:
+        if datetime.now() > self.access_token_expiration:
+            log('Create new access token!!!')
             return self._get_access_token()
+        log('Use existing access token!!! Expiration: {} - Type: {} - Token: ...{}'.format(self.access_token_expiration, self.access_token['token_type'], self.access_token['access_token'][-20:]))
         return True
 
     def _get_mowers(self):
     
-        self.mowers = []
-        mowers = self._http_get_with_retry(GET, URL_GET_MOWERS)
+        mowers = self._http_with_retry(GET, URL_GET_MOWERS)
         if mowers:
+            self.mowers = []
             for mower in mowers['data']:
                 self.mowers.append({'id': mower['id'], 'name': mower['attributes']['system']['name']})
             return True
@@ -292,12 +328,15 @@ class Husqvarna():
     def _get_mower_detailed_info(self):
         status = True
         for index, mower in enumerate(self.mowers):
-            mower_info = self._http_get_with_retry(GET, '{}/{}'.format(URL_GET_MOWERS, mower['id']), mower_name=self.mowers[index]['name'])
+            mower_info = self._http_with_retry(GET, '{}/{}'.format(URL_GET_MOWERS, mower['id']), mower_name=self.mowers[index]['name'])
             if mower_info:
                 self.mowers[index]['battery_pct'] = mower_info['data']['attributes']['battery']['batteryPercent']
                 self.mowers[index]['activity'] = mower_info['data']['attributes']['mower']['activity']
                 self.mowers[index]['state'] = mower_info['data']['attributes']['mower']['state']
-                self.mowers[index]['error_state'] = ErrorCodes[mower_info['data']['attributes']['mower']['errorCode']] if 'ERROR' in self.mowers[index]['state'] else None
+                try:
+                    self.mowers[index]['error_state'] = ErrorCodes[mower_info['data']['attributes']['mower']['errorCode']] if 'ERROR' in self.mowers[index]['state'] else None
+                except:
+                    self.mowers[index]['error_state'] = None
             else:
                 status = False
                 break
@@ -317,7 +356,7 @@ class Husqvarna():
             else:
                 json = { 'data': {'type': action} } 
             self.s.headers.update( { 'Content-Type': 'application/vnd.api+json' } )
-            action = self._http_get_with_retry(POST, '{}/{}/actions'.format(URL_GET_MOWERS, mower_id), json, mower_name=mower_name)
+            action = self._http_with_retry(POST, '{}/{}/actions'.format(URL_GET_MOWERS, mower_id), json, mower_name=mower_name)
             if action:
                 return True
         return False
@@ -328,7 +367,7 @@ class Husqvarna():
                 return mower['id']
         return None
 
-    def _http_get_with_retry(self, mode, url, json_post_data=None, mower_name=None):
+    def _http_with_retry(self, mode, url, json_post_data=None, post_data=None, mower_name=None):
         def _analyze_http_error(message, url, mower_name=None):
     
             #API limits reached
@@ -346,47 +385,55 @@ class Husqvarna():
         retry_counter = 0
         execution_status = False
         while True:
-            time.sleep(API_CALL_DELAY) #Avoid doing more than 1 call per second
+            time.sleep(API_CALL_DELAY*(retry_counter+1)) #Avoid doing more than 1 call per second
             try:
                 if mode == GET:
-                    r = self.s.get(url)
+                    r = self.s.get(url, timeout=API_TIMEOUT)
                 else:
-                    r = self.s.post(url, json=json_post_data)
-            except (requests.ConnectTimeout, requests.ReadTimeout, requests.Timeout, requests.ConnectionError):
+                    r = self.s.post(url, json=json_post_data, data=post_data, verify=False, timeout=API_TIMEOUT)
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, requests.exceptions.RequestException):
                 retry_counter += 1
                 if retry_counter >= 3:
                     self.error = 'Connection error to url {}.'.format(url)
-                break
+                    break
+            else:
+                #All good
+                if r.status_code in [200, 201, 202]:
+                    self.error = None
+                    self.api_limit_reached = False
+                    execution_status = True
+                    break
 
-            #All good
-            if r.status_code in [200, 202]:
-                self.error = None
-                self.api_limit_reached = False
-                execution_status = True
-                break
-
-            #Error received
-            elif r.status_code >= 400 and r.status_code < 500:
-                self.error = _analyze_http_error(r, url, mower_name)
-                break
-
-            #Internal server error
-            elif r.status_code >= 500:
-                retry_counter += 1
-                if retry_counter >= 3:
+                #Authentication error received: following the exchange with the helpdesk openapi.servicedesk@husqvarnagroup.com, there
+                #are regularly timeouts on the commands that translates also in an authentication error. Hence adding also retries...
+                elif r.status_code == 403:
+                    retry_counter += 1
+                    if retry_counter >= 3:
+                        self.error = _analyze_http_error(r, url, mower_name)
+                        break
+            
+                #Error received
+                elif r.status_code >= 400 and r.status_code < 500:
                     self.error = _analyze_http_error(r, url, mower_name)
                     break
+
+                #Internal server error
+                elif r.status_code >= 500:
+                    retry_counter += 1
+                    if retry_counter >= 3:
+                        self.error = _analyze_http_error(r, url, mower_name)
+                        break
                     
-            #Other errors
-            else:
-                self.error = 'HTTP error ({}) not specifically handled.'.format(r.status_code)
-                break
+                #Other errors
+                else:
+                    self.error = 'HTTP error ({}) not specifically handled.'.format(r.status_code)
+                    break
 
         return r.json() if execution_status else None
                 
 if __name__ == "__main__":
 
-    husq = Husqvarna('xxx', 'xxx')
+    husq = Husqvarna('xxxxxxxxxxxxxxxxxxxxxxx', 'xxxxxxxxxxxxxxxxxxxxx')
     if husq:
         if husq.get_mowers() and husq.get_mowers_info():
             print(husq.mowers)
@@ -401,4 +448,5 @@ if __name__ == "__main__":
                 print('({}) Error getting mower information: {}'.format(datetime.now(), husq.get_http_error()))
             import time
             time.sleep(30)
-
+    else:
+        print(husq.error)
