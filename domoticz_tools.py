@@ -6,7 +6,7 @@
 
 __all__ = ['TIMEDOUT', 'MINUTE', 'DEBUG_OFF', 'DEBUG_ON', 'DEBUG_ON_NO_FRAMEWORK',\
            'DumpConfigToLog', \
-           'GetNextFreeUnit', 'FindUnitFromName', 'CreateDescription', 'UpdateDevice', 'UpdateDeviceBatSig', 'TimeoutDevice', 'TimeoutDevicesByName', 'UpdateDeviceOptions', 'SecondsSinceLastUpdate', \
+           'GetNextFreeUnit', 'FindUnitFromName', 'FindUnitFromDescription', 'AddTagToDescription', 'GetTagFromDescription', 'UpdateDevice', 'UpdateDeviceBatSig', 'TimeoutDevice', 'TimeoutDevicesByName', 'UpdateDeviceOptions', 'SecondsSinceLastUpdate', \
            'getConfigItemDB', 'setConfigItemDB', 'getConfigItemFile', 'setConfigItemFile', \
            'getCPUtemperature', \
            'FormatWebSocketMessage', 'FormatWebSocketPong', 'FormatWebSocketMessageDisconnect', \
@@ -16,6 +16,7 @@ __all__ = ['TIMEDOUT', 'MINUTE', 'DEBUG_OFF', 'DEBUG_ON', 'DEBUG_ON_NO_FRAMEWORK
 #IMPORTS
 import Domoticz
 import datetime
+import json
 import os
 
 #CONSTANTS
@@ -55,11 +56,41 @@ def FindUnitFromName(Devices, Parameters, Name, TruncSubName=False):
         for unit in [Unit for Unit in Devices if Devices[Unit].Name == '{} - {}'.format(Parameters['Name'], Name)]:
             return unit
     return False
-    
-#CREATE DESCRIPTION OF A DEVICE
-def CreateDescription(tag):
-    return 'Do not remove: [{}]'.format(tag)#UPDATE THE DEVICE
 
+#GET DEVICE UNIT BY USING THE DESCRIPTION FIELD
+def FindUnitFromDescription(Devices, Parameters, Name):
+    for unit in [Unit for Unit in Devices if GetTagFromDescription(Devices, Unit, 'Name') == '{} - {}'.format(Parameters['Name'], Name)]:
+        return unit
+    return False
+
+#ADD TAG TO DESCRIPTION OF A DEVICE
+def AddTagToDescription(Devices, Unit, tagName, tag):
+    descriptions = [] if Devices[Unit].Description == '' else [ Devices[Unit].Description ]
+    if 'Do not remove: ' in descriptions[0]:
+        descriptions = descriptions[0].split('; ')
+        for index, description in enumerate(descriptions):
+            if description.startswith('Do not remove: '):
+                Donotremove = json.loads(description[15:])
+                Donotremove[0][tagName] = tag
+                descriptions[index] = 'Do not remove: {}'.format(json.dumps(Donotremove))
+    else: 
+        descriptions += [ 'Do not remove: [{{"{}":"{}"}}]'.format(tagName, tag) ]
+    Devices[Unit].Update(Description='; '.join(descriptions), nValue=Devices[Unit].nValue, sValue=Devices[Unit].sValue)
+
+#GET TAG FROM DESCRIPTION OF A DEVICE
+def GetTagFromDescription(Devices, Unit, tagName):
+    tag = None
+    descriptions = Devices[Unit].Description
+    if 'Do not remove: ' in descriptions:
+        descriptions = descriptions.split('; ')
+        for description in descriptions:
+            if description.startswith('Do not remove: '):
+                Donotremove = json.loads(description[15:])
+                if tagName in Donotremove[0]:
+                    tag = Donotremove[0][tagName]
+    return tag
+     
+#UPDATE THE DEVICE
 def UpdateDevice(AlwaysUpdate, Devices, Unit, nValue, sValue, **kwargs):
     Updated = False
     if Unit in Devices:
@@ -214,5 +245,4 @@ def getDistance(origin, destination):
     d = radius * c
 
     return d
-
 
