@@ -65,6 +65,7 @@ _IMAGE_INVERSE = 'Husqvarna_Inverse'
 _IMAGE_OFF = 'Husqvarna_Off'
 
 #ACTIONS
+LOGIN = 'Login'
 GET_MOWERS = 'GetMowers'
 GET_STATUS = 'GetStatus'
 START = 'Start (10h)'
@@ -83,7 +84,7 @@ class BasePlugin:
         self.debug = DEBUG_OFF
         self.runAgain = MINUTE
         self.speed_status = STATUS_SPEED_NORMAL
-        self.Husqvarna = None
+        self.MyHusqvarna = None
         self.tasksQueue = queue.Queue()
         self.tasksThread = threading.Thread(name='QueueThread', target=BasePlugin.handleTasks, args=(self,))
 
@@ -108,10 +109,8 @@ class BasePlugin:
         TimeoutDevice(Devices, All=True)
         
         # Start thread
-        self.MyHusq = Husqvarna.Husqvarna(Parameters['Mode1'], Parameters['Mode2'])
-        if not self.MyHusq:
-            Domoticz.Error('Unable to get data from Husqvarna API (Husqvarna description: {}).'.format(self.MyHusq.get_http_error()))
         self.tasksThread.start()
+        self.tasksQueue.put({'Action': LOGIN})
         self.tasksQueue.put({'Action': GET_MOWERS})
         self.tasksQueue.put({'Action': GET_STATUS})
 
@@ -120,7 +119,8 @@ class BasePlugin:
         
         # Signal queue thread to exit
         self.tasksQueue.put(None)
-        self.tasksThread.join()
+        if self.tasksThread and self.tasksThread.is_alive():
+            self.tasksThread.join()
 
         # Wait until queue thread has exited
         Domoticz.Debug('Threads still active: {} (should be 1)'.format(threading.active_count()))
@@ -150,7 +150,7 @@ class BasePlugin:
                     mower_name = re.search('{} - (.*?) - {}'.format(Parameters['Name'], ACTIONS), Devices[Unit].Name)[1]
                 Domoticz.Debug('Mower found to send command to ({}).'.format(mower_name))
                 found = False
-                for mower in self.MyHusq.mowers:
+                for mower in self.MyHusqvarna.mowers:
                     if mower['name'] == mower_name:
                         found = True
                         if Devices[Unit].Name.endswith(RUN):
@@ -178,7 +178,7 @@ class BasePlugin:
                             elif Level == 50:
                                 self.tasksQueue.put({'Action': PARK_UNTIL_NEXT_SCHEDULE, 'Mower_name': mower_name})
                 if not found:
-                    Domoticz.Error('"{}" is not a valid mower (cannot be found in the list of connected mowers "{}").'.format(mower_name, self.MyHusq.mowers)) 
+                    Domoticz.Error('"{}" is not a valid mower (cannot be found in the list of connected mowers "{}").'.format(mower_name, self.MyHusqvarna.mowers)) 
                     TimeoutDevicesByName(Devices, mower_name)               
             except:
                 Domoticz.Debug('Error executing the action.')
@@ -194,21 +194,25 @@ class BasePlugin:
     def onHeartbeat(self):
         self.runAgain -= 1
         if self.runAgain <= 0:
+        
+            if self.MyHusqvarna is None:
+                self.tasksQueue.put({'Action': LOGIN})
+            
             now = datetime.now()
-            if self.MyHusq.get_timestamp_last_update_mower_list() + timedelta(days=1) < now:
+            if self.MyHusqvarna.get_timestamp_last_update_mower_list() + timedelta(days=1) < now:
                 self.tasksQueue.put({'Action': GET_MOWERS})
                 
             self.tasksQueue.put({'Action': GET_STATUS})
             # Dynamic adaption of update time to reduce possibility throttling on reaching the API limits
             # This does not solve the problem of having reached the limit of 10000 requests/month (max: every 4-5 minutes)
-            if self.MyHusq.are_api_limits_reached():
+            if self.MyHusqvarna.are_api_limits_reached():
                 self.runAgain = max(60*MINUTE, self.runAgain)
                 if self.speed_status != STATUS_SPEED_LIMITS_EXCEEDED:
                     Domoticz.Status('Reduce status update speed to {} minutes as Husqvarna API limits are reached'.format(self.runAgain/MINUTE))
                     self.speed_status = STATUS_SPEED_LIMITS_EXCEEDED
             else:
                 hours = now.hour
-                if self.MyHusq.are_all_mowers_off():
+                if self.MyHusqvarna.are_all_mowers_off():
                     self.runAgain = 60*MINUTE    #slow down when mowers are off
                     if self.speed_status != STATUS_SPEED_ALL_OFF:
                         Domoticz.Status('Reduce status update speed to {} minutes as all Husqvarna mowers are off.'.format(self.runAgain/MINUTE))
@@ -233,23 +237,30 @@ class BasePlugin:
                 if task is None:
                     Domoticz.Debug('Exiting task handler')
                     try:
-                        self.MyHusq.close()
+                        self.MyHusqvarna.close()
+                        self.MyHusqvarna = None
                     except AttributeError:
                         pass
                     self.tasksQueue.task_done()
                     break
 
                 Domoticz.Debug('Handling task: {}.'.format(task['Action']))
-                if task['Action'] == GET_MOWERS:
-                    if not self.MyHusq.get_mowers():
-                        Domoticz.Error('Error getting list of mowers from Husqvarna Cloud.')
+                if task['Action'] == LOGIN:
+                    self.MyHusqvarna = Husqvarna.Husqvarna(Parameters['Mode1'], Parameters['Mode2'])
+                    if not self.MyHusqvarna:
+                        Domoticz.Error('Unable to get credentials from Husqvarna Cloud (Husqvarna description: {}).'.format(self.MyHusqvarna.get_http_error()))
+                        TimeoutDevice(Devices, All=True)
+                
+                elif task['Action'] == GET_MOWERS:
+                    if not self.MyHusqvarna.get_mowers():
+                        Domoticz.Error('Error getting list of mowers from Husqvarna Cloud (Husqvarna description: {}).'.format(self.MyHusqvarna.get_http_error()))
                         TimeoutDevice(Devices, All=True)
 
                 elif task['Action'] == GET_STATUS:
-                    if self.MyHusq.get_mowers_info():
-                        if self.MyHusq.mowers:
+                    if self.MyHusqvarna.get_mowers_info():
+                        if self.MyHusqvarna.mowers:
                            
-                            for mower in self.MyHusq.mowers:
+                            for mower in self.MyHusqvarna.mowers:
                             
                                 # Status of Mower
                                 Unit = FindUnitFromName(Devices, Parameters, '{} - {}'.format(mower['name'], STATE))
@@ -304,42 +315,41 @@ class BasePlugin:
                                 UpdateDevice(True, Devices, Unit, 2, 0, Image=Image)
 
                         else:
-                            Domoticz.Error('No Husvarna mowers returned by API.')
+                            Domoticz.Error('No Husvarna mowers available in the list.')
                             TimeoutDevice(Devices, All=True)
 
                     else:
-                        Domoticz.Error('Error getting status from Husqvarna: {}'.format(self.MyHusq.get_http_error()))
+                        Domoticz.Error('Error getting detailed status of mowers from Husqvarna Cloud (Husqvarna description: {}).'.format(self.MyHusqvarna.get_http_error()))
                         TimeoutDevice(Devices, All=True)
 
                 elif task['Action'] == START:
-                    
                     #Start for 10 hours
-                    if self.MyHusq.is_mower_off == False and not self.MyHusq.action_Start(task['Mower_name'], 600):
-                        Domoticz.Error('Error Husqvarna {} on Start Action: {}'.format(task['Mower_name'], self.MyHusq.get_http_error()))
+                    if self.MyHusqvarna.is_mower_off(task['Mower_name']) == False and not self.MyHusqvarna.action_Start(task['Mower_name'], 600):
+                        Domoticz.Error('Error Husqvarna {} on Start Action: {}'.format(task['Mower_name'], self.MyHusqvarna.get_http_error()))
                         TimeoutDevicesByName(Devices, task['Mower_name'])
                     self.runAgain = 2*MINUTE
 
                 elif task['Action'] == PARK_UNTIL_FURTHER_NOTICE:
-                    if self.MyHusq.is_mower_off == False and not self.MyHusq.action_ParkUntilFurtherNotice(task['Mower_name']):
-                        Domoticz.Error('Error Husqvarna {} on ParkUntilFurtherNotice action: {}'.format(task['Mower_name'], self.MyHusq.get_http_error()))
+                    if self.MyHusqvarna.is_mower_off(task['Mower_name']) == False and not self.MyHusqvarna.action_ParkUntilFurtherNotice(task['Mower_name']):
+                        Domoticz.Error('Error Husqvarna {} on ParkUntilFurtherNotice action: {}'.format(task['Mower_name'], self.MyHusqvarna.get_http_error()))
                         TimeoutDevicesByName(Devices, task['Mower_name'])
                     self.runAgain = 2*MINUTE
 
                 elif task['Action'] == PARK_UNTIL_NEXT_SCHEDULE:
-                    if self.MyHusq.is_mower_off == False and not self.MyHusq.action_ParkUntilNextSchedule(task['Mower_name']):
-                        Domoticz.Error('Error Husqvarna {} on ParkUntilNextSchedule action: {}'.format(task['Mower_name'], self.MyHusq.get_http_error()))
+                    if self.MyHusqvarna.is_mower_off(task['Mower_name']) == False and not self.MyHusqvarna.action_ParkUntilNextSchedule(task['Mower_name']):
+                        Domoticz.Error('Error Husqvarna {} on ParkUntilNextSchedule action: {}'.format(task['Mower_name'], self.MyHusqvarna.get_http_error()))
                         TimeoutDevicesByName(Devices, task['Mower_name'])
                     self.runAgain = 2*MINUTE
                     
                 elif task['Action'] == PAUSE:
-                    if self.MyHusq.is_mower_off == False and not self.MyHusq.action_Pause(task['Mower_name']):
-                        Domoticz.Error('Error Husqvarna {} on Pause action: {}'.format(task['Mower_name'], self.MyHusq.get_http_error()))
+                    if self.MyHusqvarna.is_mower_off(task['Mower_name']) == False and not self.MyHusqvarna.action_Pause(task['Mower_name']):
+                        Domoticz.Error('Error Husqvarna {} on Pause action: {}'.format(task['Mower_name'], self.MyHusqvarna.get_http_error()))
                         TimeoutDevicesByName(Devices, task['Mower_name'])
                     self.runAgain = 2*MINUTE
 
                 elif task['Action'] == RESUME_SCHEDULE:
-                    if self.MyHusq.is_mower_off == False and not self.MyHusq.action_ResumeSchedule(task['Mower_name']):
-                        Domoticz.Error('Error Husqvarna {} on ResumeSchedule action: {}'.format(task['Mower_name'], self.MyHusq.get_http_error()))
+                    if self.MyHusqvarna.is_mower_off(task['Mower_name']) == False and not self.MyHusqvarna.action_ResumeSchedule(task['Mower_name']):
+                        Domoticz.Error('Error Husqvarna {} on ResumeSchedule action: {}'.format(task['Mower_name'], self.MyHusqvarna.get_http_error()))
                         TimeoutDevicesByName(Devices, task['Mower_name'])
                     self.runAgain = 2*MINUTE
 
@@ -398,4 +408,3 @@ def onHeartbeat():
 ################################################################################
 # Specific helper functions
 ################################################################################
-
