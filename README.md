@@ -40,7 +40,10 @@ On the developer site, you will find now a client_id (or application_id) and a c
   * to one hour when the limit of 10000 calls/month is achieved
   * to one hour when the automower is off (eg during winter)
   * to three hours during night (between 10pm and 5am)
-  
+
+## Updating
+When updating to the plugin supporting the Extended Plugin Framework, new devices are created. To keep the history, use the "replace" function from the GUI. Then all the history will be kept and all the references to the devices in scripts, groups, ... are also kept.
+
 ## Automation ideas
 * You can link possible weather sensors with the Husqvarna mower. Eg. if it is start raining, the Husqvarna mower can be stopped mowing and return return to its charging station.
 * The device 'State' can be used to check if there has been an error occured; in case of error a notification could be sent.
