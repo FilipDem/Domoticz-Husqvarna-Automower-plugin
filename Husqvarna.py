@@ -476,7 +476,7 @@ class Husqvarna():
 
 
 if __name__ == "__main__":
-    husq = Husqvarna('7b4c1ca8-8658-4be0-8970-cc5d3d67f6ac', 'ad0d2f00-575b-4ffe-a3ad-83097ae2cc67')
+    husq = Husqvarna('xxxxxxxxxxxx', 'yyyyyyyyyyyyyyy')
     if husq:
         if husq.get_mowers() and husq.get_mowers_info():
             print(husq.mowers)
