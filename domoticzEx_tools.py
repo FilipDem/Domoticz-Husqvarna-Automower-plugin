@@ -457,6 +457,21 @@ def domoticz_api(parameters: Dict[str, str], params: Dict[str, Any]) -> Optional
 
     return None
 
+def log_backtrace_error(parameters: Dict[str, str]) -> None:
+    """
+    Write the backtrace to a logfile on disk.
+    Args:
+        parameters: Plugin parameters including address, port, username, password
+    """
+    # For debugging
+    import traceback
+    from pathlib import Path
+    log_path = Path(parameters['HomeFolder']) / f"{parameters['Name']}_traceback.txt"
+    with log_path.open("a") as myfile:
+        myfile.write(f'-General Error-{datetime.datetime.now()}------------------\n')
+        myfile.write(f'{traceback.format_exc()}')
+        myfile.write('---------------------------------\n')
+
 
 # Constants for backward compatibility
 TIMEDOUT = DomoticzConstants.TIMEDOUT
@@ -489,6 +504,7 @@ __all__ = [
     'get_device_n_value', 'get_unit', 'seconds_since_last_update',
     'date_string_to_datetime', 'get_config_item_db', 'set_config_item_db',
     'erase_config_item_db', 'get_distance', 'average', 'domoticz_api',
+    'log_backtrace_error',
     
     # Aliases for backward compatibility
     'DumpConfigToLog', 'UpdateDevice', 'TimeoutDevice',
