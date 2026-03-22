@@ -61,6 +61,7 @@ import Husqvarna
         <ul>
             <li><b>Client_id:</b> Your Husqvarna API client ID (also known as application ID). Obtain this from the Husqvarna Developer Portal: <a href="https://developer.husqvarnagroup.cloud/applications">https://developer.husqvarnagroup.cloud/applications</a>. You will need to create an application to get these credentials.</li>
             <li><b>Client_secret:</b> Your Husqvarna API client secret (also known as application secret). Obtain this from the Husqvarna Developer Portal, linked to your application. This should be kept confidential.</li>
+            <li><b>Start duration:</b> The duration in minutes for the timed Start action in the Actions selector. The default is 360 minutes (6 hours). Adjust this to your preferred mowing duration.</li>
             <li><b>Update interval:</b> The frequency, in minutes, at which the plugin will poll the Husqvarna API for status updates. A smaller interval means more frequent updates. Avoid using permanently small intervals as Husqvarna implemented a restriction on the number of updates (see the Husqvarna Developer Portal for more information). Please note that if all configured mowers are detected as 'OFF' (e.g., during winter storage), the plugin will automatically reduce this polling interval to once per hour to minimize unnecessary API calls and save resources. Normal polling resumes when a mower becomes active again.</li>
             <li><b>Debug:</b> Select the level of debugging information to be logged to the Domoticz log. "None" is recommended for normal operation, while other options provide more detailed logs for troubleshooting and development.</li>
         </ul>
@@ -82,6 +83,7 @@ import Husqvarna
     <params>
         <param field="Mode1" label="Client_id" width="250px" required="true" default=""/>
         <param field="Mode2" label="Client_secret" width="250px" required="true" default="" password="true"/>
+        <param field="Mode3" label="Start duration (minutes)" width="120px" required="true" default="360"/>
         <param field="Mode5" label="Update interval" width="120px" required="true" default="1"/>
         <param field="Mode6" label="Debug" width="120px">
             <options>
@@ -107,7 +109,7 @@ ACTIVITY_LOG_MAP = {
     'GOING_HOME':        'Going home',
     'CHARGING':          'Charging',
     'LEAVING':           'Leaving charging station',
-    'PARKED_IN_CS':      'Parked in charging station',
+    'PARKED_IN_CS':      'Parked',
     'STOPPED_IN_GARDEN': 'Stopped in garden',
 }
 
@@ -157,7 +159,7 @@ class HusqvarnaAction(str, Enum):
     GET_MOWERS = 'GetMowers'
     GET_STATUS = 'GetStatus'
     START = 'Start'
-    START_6H = 'Start (6h)'
+    START_MODE3 = 'Start'
     PAUSE = 'Pause'
     RESUME_SCHEDULE = 'Resume Schedule'
     PARK_UNTIL_FURTHER_NOTICE = 'Park Until Further Notice'
@@ -193,10 +195,12 @@ class HusqvarnaPlugin:
         self.tasks_queue = queue.Queue()
         self.tasks_thread = threading.Thread(
             name='QueueThread',
-            target=self._handle_tasks
+            target=self._handle_tasks,
+            daemon=True
         )
         self.previous_activity = {}  # type: Dict[str, str]
         self.devices_created = set()  # type: Set[str]  # Track mowers for which devices have been created
+        self.stop_event = threading.Event()  # Signals background thread to abort HTTP retries
 
     def on_start(self) -> None:
         """Handle the plugin startup process."""
@@ -277,15 +281,33 @@ class HusqvarnaPlugin:
         """Handle the plugin shutdown process."""
         Domoticz.Debug('onStop called')
         self.stop_requested = True
+        self.stop_event.set()
+
+        # Pass stop event to API so HTTP retries are aborted immediately
+        if self.husqvarna_api:
+            self.husqvarna_api.set_stop_event(self.stop_event)
+
+        # Empty the queue so None is picked up immediately
+        while not self.tasks_queue.empty():
+            try:
+                self.tasks_queue.get_nowait()
+                self.tasks_queue.task_done()
+            except queue.Empty:
+                break
 
         self.tasks_queue.put(None)
 
-        if self.tasks_thread and self.tasks_thread.is_alive():
-            self.tasks_thread.join(timeout=10)
-            if self.tasks_thread.is_alive():
-                Domoticz.Debug('QueueThread did not stop within timeout.')
-            else:
-                Domoticz.Debug('QueueThread stopped cleanly.')
+        # Wait actively in the main thread so Domoticz registers the wait time.
+        # This prevents Domoticz from reporting "Plugin has threads still running"
+        # because it counts the wait as part of the shutdown sequence.
+        end_time = time.time() + 9
+        while self.tasks_thread.is_alive() and time.time() < end_time:
+            time.sleep(0.1)
+
+        if self.tasks_thread.is_alive():
+            Domoticz.Debug('QueueThread did not stop within timeout.')
+        else:
+            Domoticz.Debug('QueueThread stopped cleanly.')
 
         Domoticz.Debug('Plugin stopped')
 
@@ -385,7 +407,7 @@ class HusqvarnaPlugin:
         exec_state.retries = 0
 
         action_map = {
-            10: {'action': HusqvarnaAction.START_6H.value, 'check_charging': True},
+            10: {'action': HusqvarnaAction.START_MODE3.value, 'check_charging': True},
             20: {'action': HusqvarnaAction.PAUSE.value},
             30: {'action': HusqvarnaAction.RESUME_SCHEDULE.value},
             40: {'action': HusqvarnaAction.PARK_UNTIL_FURTHER_NOTICE.value},
@@ -719,7 +741,7 @@ class HusqvarnaPlugin:
             'GOING_HOME':               'Going home',
             'CHARGING':                 'Charging',
             'LEAVING':                  'Leaving',
-            'PARKED_IN_CS':             'Parked in charging station',
+            'PARKED_IN_CS':             'Parked',
             'STOPPED_IN_GARDEN':        'Stopped in garden',
             'CUTTING_NOT_POSSIBLE':     'Cutting not possible',
         }
@@ -763,6 +785,19 @@ class HusqvarnaPlugin:
                 # Show activity only, without "Restricted:" prefix
                 if restricted_str:
                     return f'{activity_str} ({restricted_str})'
+                # Add next schedule to "Parked in charging station"
+                if activity == 'PARKED_IN_CS':
+                    schedule = self._format_schedule_text(mower)
+                    if schedule not in ('No schedule', 'Parked'):
+                        return f'{activity_str} until {schedule}'
+                return activity_str
+            # Add next schedule to "Parked in charging station"
+            if activity == 'PARKED_IN_CS':
+                schedule = self._format_schedule_text(mower)
+                if schedule not in ('No schedule', 'Parked'):
+                    return f'{state_str}: {activity_str} until {schedule}'
+            # Don't show "In operation:" prefix
+            if state == 'IN_OPERATION':
                 return activity_str
             return f'{state_str}: {activity_str}'
 
@@ -855,7 +890,7 @@ class HusqvarnaPlugin:
 
             if restricted_reason and restricted_reason not in ('NONE', 'NOT_APPLICABLE'):
                 reason_map = {
-                    'WEEK_SCHEDULE':            'scheduled',
+                    'WEEK_SCHEDULE':            None,
                     'PARK_OVERRIDE':            'parked (override)',
                     'SENSOR':                   'sensor restriction',
                     'DAILY_LIMIT':              'daily limit reached',
@@ -864,7 +899,8 @@ class HusqvarnaPlugin:
                     'ALL_WORK_AREAS_COMPLETED': 'all areas done',
                 }
                 reason_text = reason_map.get(restricted_reason, restricted_reason)
-                result += f' ({reason_text})'
+                if reason_text:
+                    result += f' ({reason_text})'
 
             return result
 
@@ -929,7 +965,7 @@ class HusqvarnaPlugin:
             self._create_cutting_height_selector(mower_name)
 
         if UnitId.ACTIONS not in existing_units:
-            actions = f"|{HusqvarnaAction.START_6H.value}|{HusqvarnaAction.PAUSE.value}|{HusqvarnaAction.RESUME_SCHEDULE.value}|{HusqvarnaAction.PARK_UNTIL_FURTHER_NOTICE.value}|{HusqvarnaAction.PARK_UNTIL_NEXT_SCHEDULE.value}"
+            actions = f"|{HusqvarnaAction.START_MODE3.value}|{HusqvarnaAction.PAUSE.value}|{HusqvarnaAction.RESUME_SCHEDULE.value}|{HusqvarnaAction.PARK_UNTIL_FURTHER_NOTICE.value}|{HusqvarnaAction.PARK_UNTIL_NEXT_SCHEDULE.value}"
             Domoticz.Unit(
                 DeviceID=mower_name,
                 Unit=UnitId.ACTIONS,
@@ -1028,8 +1064,9 @@ class HusqvarnaPlugin:
         try:
             if action == HusqvarnaAction.START.value:
                 status = self.husqvarna_api.action_Start(mower_name, duration=1440)
-            elif action == HusqvarnaAction.START_6H.value:
-                status = self.husqvarna_api.action_Start(mower_name, duration=360)
+            elif action == HusqvarnaAction.START_MODE3.value:
+                duration = int(Parameters.get('Mode3', '360').replace(',', '.').split('.')[0])
+                status = self.husqvarna_api.action_Start(mower_name, duration=duration)
             elif action == HusqvarnaAction.PARK_UNTIL_FURTHER_NOTICE.value:
                 status = self.husqvarna_api.action_ParkUntilFurtherNotice(mower_name)
             elif action == HusqvarnaAction.PARK_UNTIL_NEXT_SCHEDULE.value:
