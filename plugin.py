@@ -8,7 +8,7 @@ It provides monitoring of mower status, battery level, location, and control fun
 start/stop, parking, and cutting height adjustment.
 
 Author: Filip Demaertelaere
-Version: 2.0.0
+Version: 2.1.0
 """
 
 # Standard imports
@@ -40,9 +40,10 @@ import Husqvarna
 
 # XML plugin configuration
 """
-<plugin key="Husqvarna" name="Husqvarna" author="Filip Demaertelaere" version="2.0.0">
+<plugin key="Husqvarna" name="Husqvarna" author="Filip Demaertelaere" version="2.1.0">
     <description>
         <h2>Husqvarna</h2>
+        <p>Version 2.1.0</p>
         <p>The Husqvarna plugin for Domoticz provides seamless integration with your Husqvarna robotic lawnmowers. Leveraging the official Husqvarna API, this plugin allows you to monitor your mower's status and control key functions directly from your Domoticz environment. It creates virtual devices for each connected mower, offering real-time insights into its activity, battery level, cutting height, and precise location.</p>
         <br/>
         <h2>Key features:</h2>
@@ -640,10 +641,8 @@ class HusqvarnaPlugin:
         """
         mower_name = mower['name']
         
-        # Create devices if they don't exist
-        if not Devices.get(mower_name, None):
-            self._create_mower_devices(mower_name)
-        
+        # Create any missing devices (handles new devices added in later versions)
+        self._create_missing_devices(mower_name)
         # Determine image based on mower state
         image = Images[ImageIdentifier.OFF.value].ID if mower.get('state') == 'OFF' else Images[ImageIdentifier.STANDARD.value].ID
         
@@ -678,17 +677,73 @@ class HusqvarnaPlugin:
 
     def _format_state_text(self, mower: Dict[str, Any]) -> str:
         """Format the state text based on mower state, activity, and error."""
+
+        STATE_MAP = {
+            'OFF':              'Off',
+            'WAIT_UPDATING':    'Updating firmware',
+            'WAIT_POWER_UP':    'Starting up',
+            'OK':               'OK',
+            'ERROR':            'Error',
+            'ERROR_AT_POWER_UP':'Error at startup',
+            'FATAL_ERROR':      'Fatal error',
+            'RESTRICTED':       'Restricted',
+            'PAUSED':           'Paused',
+            'IN_OPERATION':     'In operation',
+            'STOPPED':          'Stopped',
+        }
+
+        ACTIVITY_MAP = {
+            'UNKNOWN':                  'Unknown',
+            'NOT_APPLICABLE':           None,
+            'MOWING':                   'Mowing',
+            'GOING_HOME':               'Going home',
+            'CHARGING':                 'Charging',
+            'LEAVING':                  'Leaving',
+            'PARKED_IN_CS':             'Parked in charging station',
+            'STOPPED_IN_GARDEN':        'Stopped in garden',
+            'CUTTING_NOT_POSSIBLE':     'Cutting not possible',
+        }
+
+        RESTRICTED_MAP = {
+            'NONE':                     None,
+            'WEEK_SCHEDULE':            None,
+            'PARK_OVERRIDE':            'Parked (override)',
+            'SENSOR':                   'Sensor restriction',
+            'DAILY_LIMIT':              'Daily limit reached',
+            'FOTA':                     'Firmware update',
+            'FROST':                    'Frost protection',
+            'ALL_WORK_AREAS_COMPLETED': 'All areas completed',
+            'EXTERNAL':                 'External restriction',
+        }
+
         error_state = mower.get('error_state')
-        state = mower.get('state')
-        activity = mower.get('activity')
+        state = mower.get('state', '')
+        activity = mower.get('activity', '')
+        restricted_reason = mower.get('restricted_reason', '')
+
+        state_str = STATE_MAP.get(state, state)
+        activity_str = ACTIVITY_MAP.get(activity, activity)
+        restricted_str = RESTRICTED_MAP.get(restricted_reason, restricted_reason) if restricted_reason else None
 
         if error_state:
-            activity_str = f": {activity}" if activity and activity != 'NOT_APPLICABLE' else ""
-            return f"{state}{activity_str}\n<body><p style=\"line-height:80%;font-size:80%;\">{error_state.strip()}</p></body>"
-        elif activity == 'NOT_APPLICABLE':
-            return f"{state}"
-        else:
-            return f"{state}: {activity}"
+            base = state_str
+            if activity_str:
+                base += f': {activity_str}'
+            return f"{base}\n<body><p style=\"line-height:80%;font-size:80%;\">{error_state.strip()}</p></body>"
+
+        elif activity_str is None:
+            # NOT_APPLICABLE — toon alleen de state
+            if restricted_str:
+                return f'{state_str}: {restricted_str}'
+            return state_str
+
+        elif activity_str:
+            if state == 'RESTRICTED':
+                # Toon alleen activiteit, met optionele reden
+                if restricted_str:
+                    return f'{activity_str} ({restricted_str})'
+                return activity_str  # Geen "Restricted:" prefix
+            return f'{state_str}: {activity_str}'
 
     def _determine_mower_zone(self, mower: Dict[str, Any]) -> str:
         """Determine the garden zone where the mower is located."""
@@ -775,86 +830,98 @@ class HusqvarnaPlugin:
             Domoticz.Debug(f"Error formatting schedule text: {e}")
             return 'No schedule'
 
+    def _create_missing_devices(self, mower_name: str) -> None:
+        """
+        Create any missing Domoticz devices for a mower.
+        This allows adding new device types without requiring deletion of existing ones.
+        """
+        existing_units = set()
+        if Devices.get(mower_name):
+            existing_units = {unit for unit in Devices[mower_name].Units}
+
+        if UnitId.STATE not in existing_units:
+            Domoticz.Unit(
+                DeviceID=mower_name,
+                Unit=UnitId.STATE,
+                Name=f"{Parameters['Name']} - {mower_name} - {DeviceText.STATE.value}",
+                TypeName='Text',
+                Image=Images[ImageIdentifier.STANDARD.value].ID,
+                Used=1
+            ).Create()
+
+        if UnitId.RUN not in existing_units:
+            Domoticz.Unit(
+                DeviceID=mower_name,
+                Unit=UnitId.RUN,
+                Name=f"{Parameters['Name']} - {mower_name} - {DeviceText.RUN.value}",
+                Type=244,
+                Subtype=73,
+                Switchtype=0,
+                Image=Images[ImageIdentifier.STANDARD.value].ID,
+                Used=1
+            ).Create()
+
+        if UnitId.BATTERY not in existing_units:
+            Domoticz.Unit(
+                DeviceID=mower_name,
+                Unit=UnitId.BATTERY,
+                Name=f"{Parameters['Name']} - {mower_name} - {DeviceText.BATTERY.value}",
+                TypeName='Custom',
+                Options={'Custom': '0;%'},
+                Image=Images[ImageIdentifier.STANDARD.value].ID,
+                Used=0
+            ).Create()
+
+        if UnitId.LOCATION not in existing_units:
+            Domoticz.Unit(
+                DeviceID=mower_name,
+                Unit=UnitId.LOCATION,
+                Name=f"{Parameters['Name']} - {mower_name} - {DeviceText.LOCATION.value}",
+                TypeName='Text',
+                Image=Images[ImageIdentifier.STANDARD.value].ID,
+                Used=1
+            ).Create()
+
+        if UnitId.CUTTING not in existing_units:
+            self._create_cutting_height_selector(mower_name)
+
+        if UnitId.ACTIONS not in existing_units:
+            actions = f"|{HusqvarnaAction.START_6H.value}|{HusqvarnaAction.PAUSE.value}|{HusqvarnaAction.RESUME_SCHEDULE.value}|{HusqvarnaAction.PARK_UNTIL_FURTHER_NOTICE.value}|{HusqvarnaAction.PARK_UNTIL_NEXT_SCHEDULE.value}"
+            Domoticz.Unit(
+                DeviceID=mower_name,
+                Unit=UnitId.ACTIONS,
+                Name=f"{Parameters['Name']} - {mower_name} - {DeviceText.ACTIONS.value}",
+                TypeName='Selector Switch',
+                Options={
+                    'LevelActions': '|'*actions.count('|'),
+                    'LevelNames': actions,
+                    'LevelOffHidden': 'false',
+                    'SelectorStyle': '1'
+                },
+                Image=Images[ImageIdentifier.STANDARD.value].ID,
+                Used=1
+            ).Create()
+
+        if UnitId.SCHEDULE not in existing_units:
+            Domoticz.Unit(
+                DeviceID=mower_name,
+                Unit=UnitId.SCHEDULE,
+                Name=f"{Parameters['Name']} - {mower_name} - {DeviceText.SCHEDULE.value}",
+                TypeName='Text',
+                Image=Images[ImageIdentifier.STANDARD.value].ID,
+                Used=1
+            ).Create()
+
+        Domoticz.Debug(f"Device check complete for mower '{mower_name}'. Existing units: {existing_units}")
+
     def _create_mower_devices(self, mower_name: str) -> None:
         """
-        Create Domoticz devices for a mower.
+        Create all Domoticz devices for a new mower.
+        Delegates to _create_missing_devices and sets initial timeout.
         Args:
             mower_name: Name of the mower
         """
-        # State text display
-        Domoticz.Unit(
-            DeviceID=mower_name, 
-            Unit=UnitId.STATE, 
-            Name=f"{Parameters['Name']} - {mower_name} - {DeviceText.STATE.value}", 
-            TypeName='Text', 
-            Image=Images[ImageIdentifier.STANDARD.value].ID, 
-            Used=1
-        ).Create()
-        
-        # Run (On/Off) switch
-        Domoticz.Unit(
-            DeviceID=mower_name, 
-            Unit=UnitId.RUN, 
-            Name=f"{Parameters['Name']} - {mower_name} - {DeviceText.RUN.value}", 
-            Type=244, 
-            Subtype=73, 
-            Switchtype=0, 
-            Image=Images[ImageIdentifier.STANDARD.value].ID, 
-            Used=1
-        ).Create()
-        
-        # Battery level
-        Domoticz.Unit(
-            DeviceID=mower_name, 
-            Unit=UnitId.BATTERY, 
-            Name=f"{Parameters['Name']} - {mower_name} - {DeviceText.BATTERY.value}", 
-            TypeName='Custom', 
-            Options={'Custom': '0;%'}, 
-            Image=Images[ImageIdentifier.STANDARD.value].ID, 
-            Used=0
-        ).Create()
-        
-        # Location in garden
-        Domoticz.Unit(
-            DeviceID=mower_name, 
-            Unit=UnitId.LOCATION, 
-            Name=f"{Parameters['Name']} - {mower_name} - {DeviceText.LOCATION.value}", 
-            TypeName='Text', 
-            Image=Images[ImageIdentifier.STANDARD.value].ID, 
-            Used=1
-        ).Create()
-        
-        # Cutting height selector
-        self._create_cutting_height_selector(mower_name)
-        
-        # Actions selector
-        actions = f"|{HusqvarnaAction.START_6H.value}|{HusqvarnaAction.PAUSE.value}|{HusqvarnaAction.RESUME_SCHEDULE.value}|{HusqvarnaAction.PARK_UNTIL_FURTHER_NOTICE.value}|{HusqvarnaAction.PARK_UNTIL_NEXT_SCHEDULE.value}"
-        Domoticz.Unit(
-            DeviceID=mower_name, 
-            Unit=UnitId.ACTIONS, 
-            Name=f"{Parameters['Name']} - {mower_name} - {DeviceText.ACTIONS.value}", 
-            TypeName='Selector Switch', 
-            Options={
-                'LevelActions': '|'*actions.count('|'), 
-                'LevelNames': actions, 
-                'LevelOffHidden': 'false', 
-                'SelectorStyle': '1'
-            }, 
-            Image=Images[ImageIdentifier.STANDARD.value].ID, 
-            Used=1
-        ).Create()
-
-        # Next schedule display
-        Domoticz.Unit(
-            DeviceID=mower_name,
-            Unit=UnitId.SCHEDULE,
-            Name=f"{Parameters['Name']} - {mower_name} - {DeviceText.SCHEDULE.value}",
-            TypeName='Text',
-            Image=Images[ImageIdentifier.STANDARD.value].ID,
-            Used=1
-        ).Create()
-        
-        # Set all devices as timed out until we get real data
+        self._create_missing_devices(mower_name)
         timeout_device(Devices, device_id=mower_name)
 
     def _create_cutting_height_selector(self, mower_name: str) -> None:
