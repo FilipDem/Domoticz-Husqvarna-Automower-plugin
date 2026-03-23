@@ -11,7 +11,7 @@ Based on the official Husqvarna API:
 https://developer.husqvarnagroup.cloud/
 
 Author: Filip Demaertelaere
-Version: 2.1.0
+Version: 2.1.2
 """
 
 import time
@@ -265,6 +265,7 @@ class Husqvarna:
         self.client_secret = client_secret
         self.mowers: List[Dict[str, Any]] = []
         self.state = ApiState()
+        self.stop_event = None
         self.session = self._create_session()
         self.state.authenticated = self._get_access_token()
 
@@ -518,6 +519,14 @@ class Husqvarna:
         """Close the HTTP session."""
         if self.session:
             self.session.close()
+
+    def set_stop_event(self, stop_event) -> None:
+        """
+        Pass a threading.Event so _http_with_retry can abort retries immediately on plugin stop.
+        Args:
+            stop_event: threading.Event that is set when the plugin is stopping
+        """
+        self.stop_event = stop_event
 
     def get_http_error(self) -> Optional[str]:
         """
@@ -832,6 +841,12 @@ class Husqvarna:
         response = None
 
         while retry_counter < 3:
+            # Abort immediately if plugin is stopping
+            if self.stop_event and self.stop_event.is_set():
+                log('Stop event set, aborting HTTP retry loop.')
+                self.state.error = 'Aborted: plugin is stopping.'
+                return None
+
             try:
                 # Make the request
                 if method == HttpMethod.GET:
@@ -893,9 +908,13 @@ class Husqvarna:
                 if retry_counter >= 3:
                     break
 
-            # Wait before retrying
+            # Wait before retrying - interrupteerbaar via stop_event
             if retry_counter < 3 and not execution_status:
-                time.sleep(ApiConfig.RETRY_DELAY * (retry_counter + 1))
+                wait_seconds = ApiConfig.RETRY_DELAY * (retry_counter + 1)
+                if self.stop_event:
+                    self.stop_event.wait(timeout=wait_seconds)
+                else:
+                    time.sleep(wait_seconds)
 
         # Return parsed JSON response if successful
         if execution_status and response is not None:

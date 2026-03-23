@@ -8,7 +8,6 @@ It provides monitoring of mower status, battery level, location, and control fun
 start/stop, parking, and cutting height adjustment.
 
 Author: Filip Demaertelaere
-Version: 2.1.0
 """
 
 # Standard imports
@@ -40,10 +39,10 @@ import Husqvarna
 
 # XML plugin configuration
 """
-<plugin key="Husqvarna" name="Husqvarna" author="Filip Demaertelaere" version="2.1.0">
+<plugin key="Husqvarna" name="Husqvarna" author="Filip Demaertelaere" version="2.1.2>
     <description>
         <h2>Husqvarna</h2>
-        <p>Version 2.1.0</p>
+        <p>Version 2.1.2</p>
         <p>The Husqvarna plugin for Domoticz provides seamless integration with your Husqvarna robotic lawnmowers. Leveraging the official Husqvarna API, this plugin allows you to monitor your mower's status and control key functions directly from your Domoticz environment. It creates virtual devices for each connected mower, offering real-time insights into its activity, battery level, cutting height, and precise location.</p>
         <br/>
         <h2>Key features:</h2>
@@ -84,7 +83,7 @@ import Husqvarna
         <param field="Mode1" label="Client_id" width="250px" required="true" default=""/>
         <param field="Mode2" label="Client_secret" width="250px" required="true" default="" password="true"/>
         <param field="Mode3" label="Start duration (minutes)" width="120px" required="true" default="360"/>
-        <param field="Mode5" label="Update interval" width="120px" required="true" default="1"/>
+        <param field="Mode5" label="Update interval" width="120px" required="true" default="5"/>
         <param field="Mode6" label="Debug" width="120px">
             <options>
                 <option label="None" value="0" default="true"/>
@@ -297,17 +296,18 @@ class HusqvarnaPlugin:
 
         self.tasks_queue.put(None)
 
-        # Wait actively in the main thread so Domoticz registers the wait time.
-        # This prevents Domoticz from reporting "Plugin has threads still running"
-        # because it counts the wait as part of the shutdown sequence.
-        end_time = time.time() + 9
-        while self.tasks_thread.is_alive() and time.time() < end_time:
-            time.sleep(0.1)
+        # First do a clean join on the queue thread specifically
+        if self.tasks_thread and self.tasks_thread.is_alive():
+            self.tasks_thread.join(timeout=10)
 
-        if self.tasks_thread.is_alive():
-            Domoticz.Debug('QueueThread did not stop within timeout.')
-        else:
-            Domoticz.Debug('QueueThread stopped cleanly.')
+        # Then wait for all remaining threads to finish (prevents Domoticz abort on exit)
+        Domoticz.Debug(f'Threads still active: {threading.active_count()} (should be 1)')
+        end_time = time.time() + 70
+        while (threading.active_count() > 1) and (time.time() < end_time):
+            for thread in threading.enumerate():
+                if thread.name != threading.current_thread().name:
+                    Domoticz.Debug(f'Thread {thread.name} is still running, waiting to prevent Domoticz abort on exit.')
+            time.sleep(1.0)
 
         Domoticz.Debug('Plugin stopped')
 
@@ -630,9 +630,13 @@ class HusqvarnaPlugin:
                     self.devices_created.discard(name)
                     Domoticz.Debug(f"Removed stale execution status for mower '{name}'.")
             else:
-                Domoticz.Error(f"Error getting list of mowers from Husqvarna Cloud: {self.husqvarna_api.get_http_error()}")
-                self.system_retries += 1
-                timeout_device(Devices)
+                http_error = self.husqvarna_api.get_http_error()
+                if '429' in str(http_error):
+                    Domoticz.Status(f"Husqvarna API limiet bereikt (429) - ophalen mowerlijst tijdelijk overgeslagen.")
+                else:
+                    Domoticz.Error(f"Error getting list of mowers from Husqvarna Cloud: {http_error}")
+                    self.system_retries += 1
+                    timeout_device(Devices)
 
     def _handle_get_status_task(self) -> None:
         """Handle retrieving current status for all mowers."""
@@ -640,15 +644,26 @@ class HusqvarnaPlugin:
             if self.husqvarna_api.get_mowers_info():
                 self.system_retries = 0
                 if not self.husqvarna_api.mowers:
-                    Domoticz.Error("No Husqvarna mowers available from the Husqvarna Cloud.")
-                    self.system_retries += 1
-                    timeout_device(Devices)
+                    # Alleen een echte fout als er geen rate limit actief is
+                    if not self.husqvarna_api.are_api_limits_reached():
+                        Domoticz.Error("No Husqvarna mowers available from the Husqvarna Cloud.")
+                        self.system_retries += 1
+                        timeout_device(Devices)
+                    else:
+                        Domoticz.Debug("Mowerlijst leeg na rate limit - wordt hersteld bij volgende poll.")
                 for mower in self.husqvarna_api.mowers:
                     self._update_mower_devices(mower)
             else:
-                Domoticz.Error(f"Error getting detailed status of mowers: {self.husqvarna_api.get_http_error()}")
-                self.system_retries += 1
-                timeout_device(Devices)
+                http_error = self.husqvarna_api.get_http_error()
+                if '429' in str(http_error):
+                    # 429 = rate limit van Husqvarna API, dit is tijdelijk en geen echte fout.
+                    # Niet system_retries ophogen zodat de backoff niet onnodig oploopt.
+                    # _adjust_update_frequency() pikt are_api_limits_reached() op en vertraagt automatisch.
+                    Domoticz.Status(f"Husqvarna API limiet bereikt (429) - polling wordt tijdelijk vertraagd.")
+                else:
+                    Domoticz.Error(f"Error getting detailed status of mowers: {http_error}")
+                    self.system_retries += 1
+                    timeout_device(Devices)
 
     def _update_mower_devices(self, mower: Dict[str, Any]) -> None:
         """
@@ -892,7 +907,8 @@ class HusqvarnaPlugin:
                 reason_map = {
                     'WEEK_SCHEDULE':            None,
                     'PARK_OVERRIDE':            'parked (override)',
-                    'SENSOR':                   'sensor restriction',
+#                    'SENSOR':                   'sensor restriction',
+                    'SENSOR':                   None,
                     'DAILY_LIMIT':              'daily limit reached',
                     'FOTA':                     'firmware update',
                     'FROST':                    'frost protection',
