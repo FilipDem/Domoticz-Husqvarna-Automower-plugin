@@ -36,10 +36,13 @@ On the developer site, you will find now a client_id (or application_id) and a c
 
 ## Restrictions
 * When activating an action in Domoticz (eg start mowing), the action is not always executed immediately and it can take some seconds. This delay is mainly caused by the communication between the Husqvarna Cloud and the automower. Sometimes actions are scheduled in Husqvarna Cloud.
-* There is a restriction on the number of API calls by Husqvarna (max. 1 call per second or 10000 calls per month). This means that we can update the status at a maximal speed of once per 4.5 minutes. Take this into account when defining the update status interval in the Domoticz plugin hardware settings. The plugin implemented a "light" mechanism to avoid problem by changing automatically the update interval:
-  * to one hour when the limit of 10000 calls/month is achieved
-  * to one hour when the automower is off (eg during winter)
-  * to three hours during night (between 10pm and 5am)
+* There is a restriction on the number of API calls by Husqvarna:
+  * the quota is 21000 requests per week and appKey in total. That is 2 requests per minute for a week
+  * the rate limit is 120 requests per minute and appKey
+In theory we could now have a polling interval of every minute (which seems a bit overkill). Keep in mind that it is a change in policy as previously it was maximal 10000 calls per month. The plugin implemented a "light" mechanism to slow down the polling in the following cases. The waitng interval for these cases can be adapted in the Husqvarna.json file.
+  * all mowers are OFF
+  * Husqvarna Cloud connection errors
+  * Husqvarna returns that quota limit is achieved.
 
 ## Updating
 When updating to the plugin supporting the Extended Plugin Framework, new devices are created. To keep the history, use the "replace" function from the GUI. Then all the history will be kept and all the references to the devices in scripts, groups, ... are also kept.
