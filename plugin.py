@@ -8,6 +8,7 @@ It provides monitoring of mower status, battery level, location, and control fun
 start/stop, parking, and cutting height adjustment.
 
 Author: Filip Demaertelaere
+
 """
 
 # Standard imports
@@ -39,10 +40,10 @@ import Husqvarna
 
 # XML plugin configuration
 """
-<plugin key="Husqvarna" name="Husqvarna" author="Filip Demaertelaere" version="2.1.2>
+<plugin key="Husqvarna" name="Husqvarna" author="Filip Demaertelaere" version="2.1.3">
     <description>
         <h2>Husqvarna</h2>
-        <p>Version 2.1.2</p>
+        <p>Version 2.1.3</p>
         <p>The Husqvarna plugin for Domoticz provides seamless integration with your Husqvarna robotic lawnmowers. Leveraging the official Husqvarna API, this plugin allows you to monitor your mower's status and control key functions directly from your Domoticz environment. It creates virtual devices for each connected mower, offering real-time insights into its activity, battery level, cutting height, and precise location.</p>
         <br/>
         <h2>Key features:</h2>
@@ -58,11 +59,12 @@ import Husqvarna
         <br/>
         <h2>Hardware Plugin Configuration</h2>
         <ul>
-            <li><b>Client_id:</b> Your Husqvarna API client ID (also known as application ID). Obtain this from the Husqvarna Developer Portal: <a href="https://developer.husqvarnagroup.cloud/applications">https://developer.husqvarnagroup.cloud/applications</a>. You will need to create an application to get these credentials.</li>
-            <li><b>Client_secret:</b> Your Husqvarna API client secret (also known as application secret). Obtain this from the Husqvarna Developer Portal, linked to your application. This should be kept confidential.</li>
-            <li><b>Start duration:</b> The duration in minutes for the timed Start action in the Actions selector. The default is 360 minutes (6 hours). Adjust this to your preferred mowing duration.</li>
-            <li><b>Update interval:</b> The frequency, in minutes, at which the plugin will poll the Husqvarna API for status updates. A smaller interval means more frequent updates. Avoid using permanently small intervals as Husqvarna implemented a restriction on the number of updates (see the Husqvarna Developer Portal for more information). Please note that if all configured mowers are detected as 'OFF' (e.g., during winter storage), the plugin will automatically reduce this polling interval to once per hour to minimize unnecessary API calls and save resources. Normal polling resumes when a mower becomes active again.</li>
-            <li><b>Debug:</b> Select the level of debugging information to be logged to the Domoticz log. "None" is recommended for normal operation, while other options provide more detailed logs for troubleshooting and development.</li>
+            <li><b>Client_id : </b> Your Husqvarna API client ID (also known as application ID). Obtain this from the Husqvarna Developer Portal: <a href="https://developer.husqvarnagroup.cloud/applications">https://developer.husqvarnagroup.cloud/applications</a>. You will need to create an application to get these credentials.</li>
+            <li><b>Client_secret : </b> Your Husqvarna API client secret (also known as application secret). Obtain this from the Husqvarna Developer Portal, linked to your application. This should be kept confidential.</li>
+            <li><b>Start duration : </b> The duration in minutes for the timed Start action in the Actions selector. The default is 360 minutes (6 hours). Adjust this to your preferred mowing duration.</li>
+            <li><b>Update interval : </b> The frequency, in minutes, at which the plugin will poll the Husqvarna API for status updates. A smaller interval means more frequent updates. Avoid using permanently small intervals as Husqvarna implemented a restriction on the number of updates (see the Husqvarna Developer Portal for more information). Please note that if all configured mowers are detected as 'OFF' (e.g., during winter storage), the plugin will automatically reduce this polling interval to once per hour to minimize unnecessary API calls and save resources. Normal polling resumes when a mower becomes active again.</li>
+            <li><b>Night mode (start;end;interval min) : </b> Configure reduced polling during nighttime using the format <code>HH:MM;HH:MM;minutes</code> (e.g. <code>22:00;06:00;180</code>). The first value is the start of night mode, the second is the end, and the third is the polling interval in minutes during that period. If left empty or invalid, night mode defaults to 22:00-06:00 with a 180-minute interval.</li>
+            <li><b>Debug : </b> Select the level of debugging information to be logged to the Domoticz log. "None" is recommended for normal operation, while other options provide more detailed logs for troubleshooting and development.</li>
         </ul>
         <br/>
         <h2>Advanced Configuration (Husqvarna.json)</h2>
@@ -80,10 +82,12 @@ import Husqvarna
         <p>If this file is not present or is invalid, the plugin will revert to default values for zones (using Domoticz's configured title/location) and cutting height (min: 2, max: 6, steps: 9).</p>
     </description>
     <params>
-        <param field="Mode1" label="Client_id" width="250px" required="true" default=""/>
-        <param field="Mode2" label="Client_secret" width="250px" required="true" default="" password="true"/>
-        <param field="Mode3" label="Start duration (minutes)" width="120px" required="true" default="360"/>
-        <param field="Mode5" label="Update interval" width="120px" required="true" default="5"/>
+        <param field="Username" label="Client_id" width="250px" required="true" default=""/>
+        <param field="Password" label="Client_secret" width="250px" required="true" default="" password="true"/>
+        <param field="Mode1" label="Update interval when OFF (min)" width="120px" required="true" default="240"/>
+        <param field="Mode2" label="Night mode" width="200px" required="false" default="22:00;06:00;180"/>
+        <param field="Mode3" label="Duration Start (min)" width="120px" required="true" default="360"/>
+        <param field="Mode5" label="Update interval (min)" width="120px" required="true" default="1"/>
         <param field="Mode6" label="Debug" width="120px">
             <options>
                 <option label="None" value="0" default="true"/>
@@ -200,6 +204,7 @@ class HusqvarnaPlugin:
         self.previous_activity = {}  # type: Dict[str, str]
         self.devices_created = set()  # type: Set[str]  # Track mowers for which devices have been created
         self.stop_event = threading.Event()  # Signals background thread to abort HTTP retries
+        self.api_limit_until = None  # type: Optional[datetime.datetime]  # Holds rate-limit expiry timestamp
 
     def on_start(self) -> None:
         """Handle the plugin startup process."""
@@ -214,6 +219,12 @@ class HusqvarnaPlugin:
         # Ensure custom images are available
         self._create_custom_images()
 
+        # Log active parameters at startup
+        Domoticz.Log(f"Update interval when OFF:       {Parameters.get('Mode1', '240')} min")
+        Domoticz.Log(f"Night mode start;end;interval:  {Parameters.get('Mode2', '22:00;06:00;180')}")
+        Domoticz.Log(f"Duration Start:                 {Parameters.get('Mode3', '360')} min")
+        Domoticz.Log(f"Update interval:                {Parameters.get('Mode5', '5')} min")
+
         # Start background task thread
         self.tasks_thread.start()
 
@@ -221,7 +232,8 @@ class HusqvarnaPlugin:
         # GET_MOWERS will also create missing devices for all known mowers
         self.tasks_queue.put({'Action': HusqvarnaAction.LOGIN.value})
         self.tasks_queue.put({'Action': HusqvarnaAction.GET_MOWERS.value})
-        self.tasks_queue.put({'Action': HusqvarnaAction.GET_STATUS.value})
+        if not (self.husqvarna_api and self.husqvarna_api.are_api_limits_reached()):
+            self.tasks_queue.put({'Action': HusqvarnaAction.GET_STATUS.value})
 
     def _setup_debugging(self) -> None:
         """Set up debugging based on plugin parameters."""
@@ -482,6 +494,54 @@ class HusqvarnaPlugin:
                     else:
                         Domoticz.Debug(f"No action defined for retry for mower {mower_name}. Skipping retry.")
 
+    def _parse_night_mode(self) -> Tuple[Optional[datetime.time], Optional[datetime.time], float]:
+        """
+        Parse the Mode2 parameter for night mode configuration.
+        Format: HH:MM;HH:MM;minutes  (e.g. '22:00;06:00;180')
+        Returns:
+            Tuple of (start_time, end_time, interval_minutes).
+            Falls back to (22:00, 06:00, 180) on any parse error.
+        """
+        default_start = datetime.time(22, 0)
+        default_end = datetime.time(6, 0)
+        default_interval = 180.0
+
+        raw = Parameters.get('Mode2', '').strip()
+        if not raw:
+            return default_start, default_end, default_interval
+
+        parts = raw.split(';')
+        if len(parts) != 3:
+            Domoticz.Error(f"Night mode (Mode2) has invalid format '{raw}'. Expected 'HH:MM;HH:MM;minutes'. Using defaults.")
+            return default_start, default_end, default_interval
+
+        try:
+            start_h, start_m = map(int, parts[0].strip().split(':'))
+            end_h, end_m = map(int, parts[1].strip().split(':'))
+            interval = float(parts[2].strip().replace(',', '.'))
+            return datetime.time(start_h, start_m), datetime.time(end_h, end_m), interval
+        except (ValueError, IndexError) as e:
+            Domoticz.Error(f"Night mode (Mode2) parse error: {e}. Using defaults.")
+            return default_start, default_end, default_interval
+
+    def _is_night_mode(self, now: datetime.datetime) -> bool:
+        """Return True if the current time falls within the configured night window."""
+        start, end, _ = self._parse_night_mode()
+        current = now.time().replace(second=0, microsecond=0)
+        if start is None or end is None:
+            return False
+        if start <= end:
+            # Same-day window, e.g. 01:00-05:00
+            return start <= current < end
+        else:
+            # Overnight window, e.g. 22:00-06:00
+            return current >= start or current < end
+
+    def _get_night_interval(self) -> float:
+        """Return the configured night mode polling interval in minutes."""
+        _, _, interval = self._parse_night_mode()
+        return interval
+
     def _adjust_update_frequency(self) -> None:
         """
         Adjust the update frequency based on:
@@ -492,7 +552,6 @@ class HusqvarnaPlugin:
         5. Time of day (reduced polling at night)
         """
         now = datetime.datetime.now()
-        hours = now.hour
 
         if self.system_retries > 5:
             configured_interval_minutes = float(Parameters.get('Mode5', '1').replace(',','.'))
@@ -501,14 +560,21 @@ class HusqvarnaPlugin:
                 Domoticz.Status(f'Reduce status update speed to {self.run_again/DomoticzConstants.MINUTE} minutes because of too many errors from Husqvarna Cloud.')
                 self.speed_status = UpdateSpeed.SYSTEM_ERROR
 
-        elif self.husqvarna_api and self.husqvarna_api.are_api_limits_reached():
+        elif self.husqvarna_api and (
+            self.husqvarna_api.are_api_limits_reached() or
+            (self.api_limit_until and now < self.api_limit_until)
+        ):
+            if self.husqvarna_api.are_api_limits_reached():
+                # (Re)set the 60-minute hold timer each time the API actively reports a limit
+                self.api_limit_until = now + datetime.timedelta(hours=1)
             self.run_again = max(60 * DomoticzConstants.MINUTE, self.run_again)
             if self.speed_status != UpdateSpeed.LIMITS_EXCEEDED:
                 Domoticz.Status(f'Reduce status update speed to {self.run_again/DomoticzConstants.MINUTE} minutes as Husqvarna API limits are reached!')
                 self.speed_status = UpdateSpeed.LIMITS_EXCEEDED
 
         elif self.husqvarna_api and self.husqvarna_api.are_all_mowers_off():
-            self.run_again = 60 * DomoticzConstants.MINUTE
+            off_interval_minutes = float(Parameters.get('Mode1', '240').replace(',', '.'))
+            self.run_again = off_interval_minutes * DomoticzConstants.MINUTE
             if self.speed_status != UpdateSpeed.ALL_OFF:
                 Domoticz.Status(f'Reduce status update speed to {self.run_again/DomoticzConstants.MINUTE} minutes as all Husqvarna mowers are off.')
                 self.speed_status = UpdateSpeed.ALL_OFF
@@ -518,8 +584,9 @@ class HusqvarnaPlugin:
             self.run_again = DomoticzConstants.MINUTE * configured_interval_minutes / 2
             Domoticz.Debug(f"Increasing update speed to {self.run_again / DomoticzConstants.MINUTE} minutes as a mower is going home.")
 
-        elif hours >= 22 or hours <= 5:
-            self.run_again = DomoticzConstants.MINUTE * 180
+        elif self._is_night_mode(now):
+            night_interval = self._get_night_interval()
+            self.run_again = DomoticzConstants.MINUTE * night_interval
             if self.speed_status != UpdateSpeed.NIGHT:
                 Domoticz.Status(f'Reduce status update speed to {self.run_again/DomoticzConstants.MINUTE} minutes during nighttime hours.')
                 self.speed_status = UpdateSpeed.NIGHT
@@ -592,7 +659,7 @@ class HusqvarnaPlugin:
         Uses bool(api) which calls __bool__ on the Husqvarna object,
         which returns self.state.authenticated set during __init__.
         """
-        api = Husqvarna.Husqvarna(Parameters['Mode1'], Parameters['Mode2'])
+        api = Husqvarna.Husqvarna(Parameters['Username'], Parameters['Password'])
         if bool(api):
             self.husqvarna_api = api
             self.system_retries = 0
@@ -907,7 +974,6 @@ class HusqvarnaPlugin:
                 reason_map = {
                     'WEEK_SCHEDULE':            None,
                     'PARK_OVERRIDE':            'parked (override)',
-#                    'SENSOR':                   'sensor restriction',
                     'SENSOR':                   None,
                     'DAILY_LIMIT':              'daily limit reached',
                     'FOTA':                     'firmware update',

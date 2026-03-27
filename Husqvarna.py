@@ -581,7 +581,7 @@ class Husqvarna:
                 'accept': 'application/vnd.api+json'
             })
             
-            log(f"New access token generated! Expiration: {datetime.now() + timedelta(seconds=response.get('expires_in', 0))} - "
+            log(f"New access token generated! Expiration: {self.state.access_token_expiration} - "
                 f"Type: {response.get('token_type', '')} - Token: ...{response.get('access_token', 'N/A')[-20:]}.")
                 
             return True
