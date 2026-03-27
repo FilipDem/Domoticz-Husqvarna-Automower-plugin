@@ -8,7 +8,7 @@ It provides monitoring of mower status, battery level, location, and control fun
 start/stop, parking, and cutting height adjustment.
 
 Author: Filip Demaertelaere
-Version: 2.0.0
+
 """
 
 # Standard imports
@@ -40,39 +40,53 @@ import Husqvarna
 
 # XML plugin configuration
 """
-<plugin key="Husqvarna" name="Husqvarna" author="Filip Demaertelaere" version="2.0.0">
+<plugin key="Husqvarna" name="Husqvarna" author="Filip Demaertelaere" version="2.1.3">
     <description>
         <h2>Husqvarna</h2>
+        <p>Version 2.1.3</p>
         <p>The Husqvarna plugin for Domoticz provides seamless integration with your Husqvarna robotic lawnmowers. Leveraging the official Husqvarna API, this plugin allows you to monitor your mower's status and control key functions directly from your Domoticz environment. It creates virtual devices for each connected mower, offering real-time insights into its activity, battery level, cutting height, and precise location.</p>
         <br/>
-        <h2>Key features:</h2>
+        <h2>Key features</h2>
         <ul>
             <li><b>Real-time Status Monitoring:</b> View your mower's current state (e.g., mowing, charging, parked, paused, off).</li>
             <li><b>Battery Level Indication:</b> Keep track of your mower's battery percentage.</li>
             <li><b>Location Tracking:</b> Based on GPS coordinates of your mower, with an option to display its proximity to predefined zones (e.g., "Front Garden", "Back Garden").</li>
             <li><b>Remote Control Actions:</b> Start mowing, pause operations, resume schedules, or park the mower (until further notice or next schedule).</li>
             <li><b>Cutting Height Adjustment:</b> Remotely set the cutting height of your mower.</li>
+            <li><b>Next Schedule:</b> Shows the next upcoming scheduled mowing session.</li>
             <li><b>Zone Management:</b> Define custom zones for your property to get distance information and easily identify which zone your mower is currently in.</li>
         </ul>
+        <p>The RUN device generates a command <b>resume schedule</b> (ON) and <b>park until further notice</b> (OFF). For a fluent integration and the ability to use the timer mechanism of Domoticz to manage the Husqvarna mower, define a full-day schedule (00:00-24:00) on the mower or in the Husqvarna app for the complete week.</p>
         <br/>
         <h2>Hardware Plugin Configuration</h2>
         <ul>
             <li><b>Client_id:</b> Your Husqvarna API client ID (also known as application ID). Obtain this from the Husqvarna Developer Portal: <a href="https://developer.husqvarnagroup.cloud/applications">https://developer.husqvarnagroup.cloud/applications</a>. You will need to create an application to get these credentials.</li>
             <li><b>Client_secret:</b> Your Husqvarna API client secret (also known as application secret). Obtain this from the Husqvarna Developer Portal, linked to your application. This should be kept confidential.</li>
-            <li><b>Update interval:</b> The frequency, in minutes, at which the plugin will poll the Husqvarna API for status updates. A smaller interval means more frequent updates. Avoid using permanently small intervals as Husqvarna implemented a restriction on the number of updates (see the Husqvarna Developer Portal for more information). Please note that if all configured mowers are detected as 'OFF' (e.g., during winter storage), the plugin will automatically reduce this polling interval to once per hour to minimize unnecessary API calls and save resources. Normal polling resumes when a mower becomes active again.</li>
+            <li><b>Update interval:</b> The frequency, in minutes, at which the plugin will poll the Husqvarna API for status updates. A smaller interval means more frequent updates. The current restrictions mentioned on the Husqvarna Developer Portal are a rate limit of 120 requests per minute and a quota of 21000 requests per week (2 requests per minute for a week). Please note that if all configured mowers are detected as 'OFF' (e.g., during winter storage), the plugin will automatically reduce this polling interval to once per hour to minimize unnecessary API calls and save resources. Normal polling resumes when a mower becomes active again.</li>
             <li><b>Debug:</b> Select the level of debugging information to be logged to the Domoticz log. "None" is recommended for normal operation, while other options provide more detailed logs for troubleshooting and development.</li>
         </ul>
         <br/>
         <h2>Advanced Configuration (Husqvarna.json)</h2>
-        <p>For advanced configurations such as defining specific zones for your mower or setting custom cutting height ranges, an optional configuration file named `Husqvarna.json` can be placed in the plugin's home folder. This JSON file allows you to define custom zones with geographical coordinates and override the default min/max cutting height settings. The min/max cutting settings can be found in the Husqvarna mobile application.</p>
-        <h3>Example Husqvarna.json content:</h3>
+        <p>For advanced configurations such as defining specific zones for your mower or setting custom cutting height ranges, an optional configuration file named `Husqvarna.json` can be placed in the plugin's home folder.</p>
+        <h3>Husqvarna.json content</h3>
+        <ul>
+            <li><b>zones:</b> List of dictionaries, defining a name of a zone and the coordinates of its center. The name of the zone is logged in Location device depending on the mowers location.</li>
+            <li><b>height_min_max (cm):</b> Convertion table of the mowing height steps to centimeter. The number of steps can be found in the Husqvarna Mower App.</li>
+            <li><b>update_interval (min):</b> Definition of interval time for mower updates in special cases/periods (eg mower is OFF, quota errors, ...).</li>
+            <li><b>start_duration (min):</b> Mowing duration assigned to the "Start mowing" command.</li>
+        </ul>
+        <br/>
+        <h3>Example Husqvarna.json</h3>
         <pre><code>
 {
     "zones": [
         { "name": "FrontGarden", "latitude": 50.8503, "longitude": 4.3517 },
         { "name": "BackGarden", "latitude": 50.8400, "longitude": 4.3400 }
     ],
-    "height_min_max (cm)": { "min": 2, "max": 6, "steps": 9 }
+    "height_min_max (cm)": { "min": 2, "max": 6, "steps": 9 },
+    "update_interval (min)": { "off": 60, "cloud_error": 180, "quota_error": 30 },
+    "start_duration (min)": 360 
+
 }
         </code></pre>
         <p>If this file is not present or is invalid, the plugin will revert to default values for zones (using Domoticz's configured title/location) and cutting height (min: 2, max: 6, steps: 9).</p>
@@ -80,7 +94,7 @@ import Husqvarna
     <params>
         <param field="Mode1" label="Client_id" width="250px" required="true" default=""/>
         <param field="Mode2" label="Client_secret" width="250px" required="true" default="" password="true"/>
-        <param field="Mode5" label="Update interval" width="120px" required="true" default="1"/>
+        <param field="Mode5" label="Update interval" width="120px" required="true" default="2"/>
         <param field="Mode6" label="Debug" width="120px">
             <options>
                 <option label="None" value="0" default="true"/>
@@ -105,6 +119,7 @@ class UnitId(IntEnum):
     ACTIONS = 4
     LOCATION = 5
     CUTTING = 6
+    NEXT_SCHEDULE = 7
 
 class DeviceText(str, Enum):
     """Text identifiers for device names."""
@@ -114,12 +129,12 @@ class DeviceText(str, Enum):
     ACTIONS = 'Actions'
     LOCATION = 'Location'
     CUTTING = 'Cutting Height (cm)'
+    NEXT_SCHEDULE = 'Next Schedule'
 
 class ImageIdentifier(str, Enum):
     """Custom image identifiers for Husqvarna mower devices."""
     STANDARD = 'Husqvarna'
-    INVERSE = 'Husqvarna_Inverse'
-    OFF = 'Husqvarna_Off'
+    OFF = 'HusqvarnaOff'
 
 class UpdateSpeed(IntEnum):
     """Status update speed modes for the plugin."""
@@ -140,19 +155,20 @@ class HusqvarnaAction(str, Enum):
     LOGIN = 'Login'
     GET_MOWERS = 'GetMowers'
     GET_STATUS = 'GetStatus'
-    START = 'Start'
-    START_6H = 'Start (6h)'
-    PAUSE = 'Pause'
-    RESUME_SCHEDULE = 'Resume Schedule'
-    PARK_UNTIL_FURTHER_NOTICE = 'Park Until Further Notice'
-    PARK_UNTIL_NEXT_SCHEDULE = 'Park Until Next Schedule'
-    SET_CUTTING_HEIGHT = 'Set Cutting Height'
+    SET_CUTTING_HEIGHT = 'SetCuttingHeight'
+    START = Husqvarna.MowerAction.START.value
+    PAUSE = Husqvarna.MowerAction.PAUSE.value
+    RESUME_SCHEDULE = Husqvarna.MowerAction.RESUME_SCHEDULE.value
+    PARK_UNTIL_FURTHER_NOTICE = Husqvarna.MowerAction.PARK_FURTHER_NOTICE.value
+    PARK_UNTIL_NEXT_SCHEDULE = Husqvarna.MowerAction.PARK_NEXT_SCHEDULE.value
 
 @dataclass
 class MowerConfig:
     """Configuration for Husqvarna mowers from JSON file."""
     zones: List[Dict[str, Any]] = field(default_factory=list)
     height_min_max: Dict[str, Any] = field(default_factory=dict)
+    update_interval: Dict[str, Any] = field(default_factory=dict)
+    start_duration: int = field(default_factory=int)
 
 @dataclass
 class ExecutionState:
@@ -172,7 +188,7 @@ class HusqvarnaPlugin:
         self.speed_status = UpdateSpeed.NORMAL
         self.system_retries = 0
         self.execution_status = {}  # type: Dict[str, ExecutionState]
-        self.husqvarna_api = None   # type: Optional[Husqvarna.Husqvarna]
+        self.Husqvarna_api = None   # type: Optional[Husqvarna.Husqvarna]
         self.config = MowerConfig()
         self.tasks_queue = queue.Queue()
         self.tasks_thread = threading.Thread(
@@ -217,6 +233,9 @@ class HusqvarnaPlugin:
         try:
             # Default values if config file not found or invalid
             default_height_min_max = {"min": 2, "max": 6, "steps": 9}
+            default_update_interval = { "off": 60, "cloud_error": 180, "quota_error": 30 }
+            default_start_duration = 360
+
             position_parts = Settings['Location'].split(';')
             # Check if position_parts has at least two elements and they can be converted to float
             if len(position_parts) >= 2 and all(isinstance(p, str) and p.strip().replace('.', '', 1).isdigit() for p in position_parts[:2]):
@@ -226,16 +245,22 @@ class HusqvarnaPlugin:
 
             self.config.height_min_max = default_height_min_max
             self.config.zones = default_zones
-
+            self.config.update_interval = default_update_interval
+            self.config.start_duration = default_start_duration
+        
             if config_file_path.exists():
                 with open(config_file_path, 'r') as json_file:
                     config_data = json.load(json_file)
                 self.config.zones = config_data.get('zones', default_zones)
                 self.config.height_min_max = config_data.get('height_min_max (cm)', default_height_min_max)
+                self.config.update_interval = config_data.get('update_interval (min)', default_update_interval)
+                self.config.start_duration = config_data.get('start_duration (min)', default_start_duration)
                 Domoticz.Debug(f'Zones found: {self.config.zones}.')
                 Domoticz.Debug(f'Cutting height range found: {self.config.height_min_max}.')
+                Domoticz.Debug(f'Update interval settings found: {self.config.update_interval}.')
+                Domoticz.Debug(f'Start duration setting found: {self.config.start_duration}.')
             else:
-                Domoticz.Debug("Husqvarna.json not found, using default zones and cutting height.")
+                Domoticz.Debug("Husqvarna.json not found, using default zones, cutting height, update intervals and start duration.")
 
         except json.JSONDecodeError as err:
             Domoticz.Error(f"Error parsing configuration file: {err}; using default zones and cutting height.")
@@ -246,14 +271,10 @@ class HusqvarnaPlugin:
 
     def _create_custom_images(self) -> None:
         """Create custom images for the mower devices if not already available."""
-        for image_id in [
-            ImageIdentifier.STANDARD,
-            ImageIdentifier.INVERSE,
-            ImageIdentifier.OFF
-        ]:
-            if image_id.value not in Images:
-                Domoticz.Image(f'{image_id.value}.zip').Create()
-                Domoticz.Debug(f"Created {image_id.value} image")
+        for image_id in [image.value for image in ImageIdentifier]:
+            if image_id not in Images:
+                Domoticz.Image(f'{image_id}.zip').Create()
+                Domoticz.Debug(f"Created {image_id} image")
 
     def on_stop(self) -> None:
         """Handle the plugin shutdown process."""
@@ -291,7 +312,7 @@ class HusqvarnaPlugin:
         Handle commands sent to the plugin from Domoticz.
         Args:
             device_id: The device identifier
-            unit: The unit within the device 
+            unit: The unit within the device
             command: The command to execute
             level: The level parameter for the command
             color: The color parameter for the command
@@ -300,7 +321,7 @@ class HusqvarnaPlugin:
 
         if self.stop_requested:
             return
-    
+
         if self.husqvarna_api is None:
             Domoticz.Error("Husqvarna API is not initialized. Actions cannot be performed.")
             timeout_device(Devices, device_id=device_id)
@@ -311,50 +332,46 @@ class HusqvarnaPlugin:
             Domoticz.Error(f"Mower {device_id} not found in connected mowers.")
             timeout_device(Devices, device_id=device_id)
             return
-            
-        if mower.get('state') == 'OFF': 
+
+        if mower.get('state') == Husqvarna.State.OFF.name:
             Domoticz.Error(f"Husqvarna mower {mower['name']} is switched off and cannot execute commands.")
             return
-            
+
         # Initialize execution status for this mower if not exists
         if device_id not in self.execution_status:
             self.execution_status[device_id] = ExecutionState()
-            
+
         # Handle Run switch (On/Off)
         if unit == UnitId.RUN:
             self._handle_run_command(device_id, mower, command)
-                
+
         # Handle cutting height adjustment
         elif unit == UnitId.CUTTING and command == 'Set Level':
             self._handle_cutting_height_command(device_id, mower, level)
                 
         # Handle action selector
-        elif unit == UnitId.ACTIONS and command == 'Set Level' and level:
+        elif unit == UnitId.ACTIONS and command == 'Set Level':
             self._handle_action_command(device_id, mower, level)
 
     def _handle_run_command(self, device_id: str, mower: Dict[str, Any], command: str) -> None:
         """Handle commands for the Run switch."""
         exec_state = self.execution_status[device_id]
+        exec_state.status = ExecutionStatus.INITIATED.value
+        exec_state.command_data.clear()
+        exec_state.retries = 0
         
-        if command == 'On':
-            exec_state.status = ExecutionStatus.INITIATED
-            exec_state.command_data.clear()
-            exec_state.retries = 0
-            
-            if mower.get('activity') == 'CHARGING':
-                exec_state.status = ExecutionStatus.DONE
+        if command == 'On':            
+            if mower.get('activity') == Husqvarna.Activity.CHARGING.name:
+                exec_state.status = ExecutionStatus.DONE.value
                 Domoticz.Status(f"Mower {mower['name']} cannot be started as it is still charging.")
             else:
-                exec_state.action = HusqvarnaAction.START.value
+                exec_state.action = HusqvarnaAction.RESUME_SCHEDULE.value
                 update_device(False, Devices, device_id, UnitId.RUN, 1, 1)
-                self.tasks_queue.put({'Action': HusqvarnaAction.START.value, 'Mower_name': mower['name']})
+                self.tasks_queue.put({'Action': exec_state.action, 'Mower_name': mower['name']})
         else: # Command is 'Off'
             exec_state.action = HusqvarnaAction.PARK_UNTIL_FURTHER_NOTICE.value
-            exec_state.status = ExecutionStatus.INITIATED # Set status for the park command
-            exec_state.command_data.clear()
-            exec_state.retries = 0
             update_device(False, Devices, device_id, UnitId.RUN, 0, 0)
-            self.tasks_queue.put({'Action': HusqvarnaAction.PARK_UNTIL_FURTHER_NOTICE.value, 'Mower_name': mower['name']})
+            self.tasks_queue.put({'Action': exec_state.action, 'Mower_name': mower['name']})
 
     def _handle_cutting_height_command(self, device_id: str, mower: Dict[str, Any], level: int) -> None:
         """Handle commands for cutting height adjustment."""
@@ -366,7 +383,7 @@ class HusqvarnaPlugin:
         
         # Calculate actual cutting height (level/10 + 1)
         # Assuming the level in Domoticz 0, 10, 20, ...
-        cutting_height = (level // 10) + 1
+        cutting_height = (level // 10) #level 0 = OFF
         self.tasks_queue.put({
             'Action': HusqvarnaAction.SET_CUTTING_HEIGHT.value, 
             'Mower_name': mower['name'], 
@@ -377,29 +394,23 @@ class HusqvarnaPlugin:
     def _handle_action_command(self, device_id: str, mower: Dict[str, Any], level: int) -> None:
         """Handle commands from the Actions selector switch."""
         exec_state = self.execution_status[device_id]
-        exec_state.status = ExecutionStatus.INITIATED
+        exec_state.status = ExecutionStatus.INITIATED.value
         exec_state.command_data.clear()
         exec_state.retries = 0
         
-        # Map levels to actions
-        action_map = {
-            10: {'action': HusqvarnaAction.START_6H.value, 'check_charging': True},
-            20: {'action': HusqvarnaAction.PAUSE.value},
-            30: {'action': HusqvarnaAction.RESUME_SCHEDULE.value},
-            40: {'action': HusqvarnaAction.PARK_UNTIL_FURTHER_NOTICE.value},
-            50: {'action': HusqvarnaAction.PARK_UNTIL_NEXT_SCHEDULE.value}
-        }
-        
-        if level in action_map:
-            action_info = action_map[level]
-            action = action_info['action']
+        if level >= 20:
+            # Map levels to actions
+            action_list = get_unit(Devices, mower['name'], UnitId.ACTIONS).Options['LevelNames'].split('|')
+            action = action_list[level//10]
             
             # Check if we need to prevent starting when charging
-            if action_info.get('check_charging', False) and mower.get('activity') == 'CHARGING':
-                exec_state.status = ExecutionStatus.DONE
+            if action.startswith(HusqvarnaAction.START.value) and mower.get('activity') == Husqvarna.Activity.CHARGING.name:
+                exec_state.status = ExecutionStatus.DONE.value
+                update_device(False, Devices, mower_name, UnitId.ACTIONS, 2, 10, Image=image)
                 Domoticz.Status(f"Mower {mower['name']} cannot be started as it is still charging.")
             else:
                 exec_state.action = action
+                Domoticz.Debug(f'Launch action {action} after command (level {level}).')
                 self.tasks_queue.put({'Action': action, 'Mower_name': mower['name']})
 
     def on_disconnect(self, connection: Any) -> None:
@@ -440,9 +451,6 @@ class HusqvarnaPlugin:
             if self.husqvarna_api and self.husqvarna_api.mowers:
                 self._retry_failed_commands()
                 
-            # Dynamic adaptation of update frequency
-            self._adjust_update_frequency()
-
     def _retry_failed_commands(self) -> None:
         """Retry failed commands if they haven't exceeded retry limit."""
         if not self.husqvarna_api or not self.husqvarna_api.mowers:
@@ -452,9 +460,9 @@ class HusqvarnaPlugin:
             mower_name = mower['name']
             if mower_name in self.execution_status:
                 exec_state = self.execution_status[mower_name]
-                if exec_state.status == ExecutionStatus.ERROR and exec_state.retries < 2:
+                if exec_state.status == ExecutionStatus.ERROR.value and exec_state.retries < 2:
                     Domoticz.Status(f"Retry {exec_state.retries + 1} for Husqvarna mower {mower_name} to launch command {exec_state.action}")
-                    exec_state.status = ExecutionStatus.INITIATED # Reset status to initiated for retry
+                    exec_state.status = ExecutionStatus.INITIATED.value # Reset status to initiated for retry
                     exec_state.retries += 1
                     
                     if exec_state.action:
@@ -473,31 +481,29 @@ class HusqvarnaPlugin:
         2. API rate limits
         3. Whether all mowers are off
         4. Going home
-        5. Time of day (reduced polling at night)
         """
         now = datetime.datetime.now()
         hours = now.hour
         
         if self.system_retries > 5:
             # Too many errors from Husqvarna server received
-            configured_interval_minutes = float(Parameters.get('Mode5', '1').replace(',','.'))
-            self.run_again = min(12*60*DomoticzConstants.MINUTE, self.system_retries*DomoticzConstants.MINUTE*configured_interval_minutes)
+            self.run_again = self.config.update_interval.get('cloud_error', 180) * DomoticzConstants.MINUTE
 
             if self.speed_status != UpdateSpeed.SYSTEM_ERROR:
                 Domoticz.Status(f'Reduce status update speed to {self.run_again/DomoticzConstants.MINUTE} minutes because of too many errors from Husqvarna Cloud.')
                 self.speed_status = UpdateSpeed.SYSTEM_ERROR
-
+                
         elif self.husqvarna_api and self.husqvarna_api.are_api_limits_reached():
             # API limits reached - slow down significantly
-            self.run_again = max(60 * DomoticzConstants.MINUTE, self.run_again)
+            self.run_again = self.config.update_interval.get('quota_error', 30) * DomoticzConstants.MINUTE
             
             if self.speed_status != UpdateSpeed.LIMITS_EXCEEDED:
                 Domoticz.Status(f'Reduce status update speed to {self.run_again/DomoticzConstants.MINUTE} minutes as Husqvarna API limits are reached!')
                 self.speed_status = UpdateSpeed.LIMITS_EXCEEDED
                 
-        elif self.husqvarna_api and self.husqvarna_api.are_all_mowers_off():
-            # All mowers off - check once per hour
-            self.run_again = 60 * DomoticzConstants.MINUTE
+        elif self.husqvarna_api and self.husqvarna_api.mowers and self.husqvarna_api.are_all_mowers_off():
+            # (only in case there are mowers in the list) All mowers off - check once per hour
+            self.run_again = self.config.update_interval.get('off', 180) * DomoticzConstants.MINUTE
             
             if self.speed_status != UpdateSpeed.ALL_OFF:
                 Domoticz.Status(f'Reduce status update speed to {self.run_again/DomoticzConstants.MINUTE} minutes as all Husqvarna mowers are off.')
@@ -505,20 +511,12 @@ class HusqvarnaPlugin:
 
         elif self.husqvarna_api and any(m.get('activity', '') == 'GOING_HOME' for m in self.husqvarna_api.mowers if isinstance(m, dict)): # Added type check for 'm'
             configured_interval_minutes = float(Parameters.get('Mode5', '1').replace(',','.'))
-            self.run_again = DomoticzConstants.MINUTE * configured_interval_minutes / 2
+            self.run_again = DomoticzConstants.MINUTE
             # No specific speed_status change for this, it's a temporary boost
             Domoticz.Debug(f"Increasing update speed to {self.run_again / DomoticzConstants.MINUTE} minutes as a mower is going home.")
         
-        elif hours >= 22 or hours <= 5:
-            # Night time - reduced polling (every 3 hours)
-            self.run_again = DomoticzConstants.MINUTE * 180
-            
-            if self.speed_status != UpdateSpeed.NIGHT:
-                Domoticz.Status(f'Reduce status update speed to {self.run_again/DomoticzConstants.MINUTE} minutes during nighttime hours.')
-                self.speed_status = UpdateSpeed.NIGHT
-                
         else:
-            # Normal daytime operation - use configured interval
+            # Normal operation - use configured interval
             configured_interval_minutes = float(Parameters.get('Mode5', '1').replace(',','.'))
             self.run_again = DomoticzConstants.MINUTE * configured_interval_minutes
             
@@ -548,13 +546,13 @@ class HusqvarnaPlugin:
                             self.husqvarna_api = None
                     except AttributeError:
                         pass
-                    self.tasks_queue.task_done()
+                    #self.tasks_queue.task_done() - the "finally" part is still executed...
                     break
                         
                 # Process the task
-                Domoticz.Debug(f"Handling task: {task['Action']}.")
+                Domoticz.Debug(f"Handling task: {task['Action']} (parameters: {task}).")
                 self._process_task(task)
-                    
+
             except queue.Empty:
                 pass # Continue loop if queue is empty 
             except Exception as e:
@@ -565,6 +563,7 @@ class HusqvarnaPlugin:
                 # Mark task as done
                 if 'task' in locals():
                     self.tasks_queue.task_done()
+                    del task
 
     def _process_task(self, task: Dict[str, Any]) -> None:
         """
@@ -577,21 +576,30 @@ class HusqvarnaPlugin:
         # Handle login
         if action == HusqvarnaAction.LOGIN.value:
             self._handle_login_task()
-            
-        # Handle mower list retrieval
-        elif action == HusqvarnaAction.GET_MOWERS.value:
-            self._handle_get_mowers_task()
-            
-        # Handle status update
-        elif action == HusqvarnaAction.GET_STATUS.value:
-            self._handle_get_status_task()
-            
-        # Handle mower commands
-        else:
-            self._handle_mower_command_task(task)
+
+        else:            
+            # Handle mower list retrieval
+            if action == HusqvarnaAction.GET_MOWERS.value:
+                self._handle_get_mowers_task()
+                
+            # Handle status update
+            elif action == HusqvarnaAction.GET_STATUS.value:
+                self._handle_get_status_task()
+                
+            # Handle mower commands
+            else:
+                self._handle_mower_command_task(task)
+
+            # Dynamic adaptation of update frequency
+            self._adjust_update_frequency()
 
     def _handle_login_task(self) -> None:
-        """Handle API login task."""
+        """
+        Handle API login task.
+        Uses bool(api) which calls __bool__ on the Husqvarna object,
+        which returns self.state.authenticated set during __init__.
+        """
+        Domoticz.Debug("Log in to Husqvarna API.")
         # Ensure Husqvarna instance is re-created on each login attempt for fresh state if needed
         self.husqvarna_api = Husqvarna.Husqvarna(Parameters['Mode1'], Parameters['Mode2'])
         if self.husqvarna_api:
@@ -605,12 +613,22 @@ class HusqvarnaPlugin:
 
     def _handle_get_mowers_task(self) -> None:
         """Handle retrieving the list of mowers."""
+        Domoticz.Debug("Retrieving the list of mowers.")
         if self.husqvarna_api:
             if self.husqvarna_api.get_mowers():
                 self.system_retries = 0
-                for mower in self.husqvarna_api.mowers:
-                    if mower['name'] not in self.execution_status: # Initialize only if not present
-                        self.execution_status[mower['name']] = ExecutionState()
+                current_mowers = { mower['name'] for mower in self.husqvarna_api.mowers }
+                for mower_name in current_mowers:
+                    # Create devices if they don't exist
+                    self._create_mower_devices(mower_name)
+                    # Initialize execution state
+                    if mower_name not in self.execution_status:
+                        self.execution_status[mower_name] = ExecutionState()
+                # Clean up execution_status for mowers no longer present
+                mowers_to_remove = [ name for name in self.execution_status if name not in current_mowers ]
+                for mower_to_del in mowers_to_remove:
+                    del self.execution_status[mower_to_del]
+                    Domoticz.Debug(f"Removed staled execution status for mower '{mower_to_del}'.")
             else:
                 Domoticz.Error(f"Error getting list of mowers from Husqvarna Cloud: {self.husqvarna_api.get_http_error()}")
                 self.system_retries += 1
@@ -618,6 +636,7 @@ class HusqvarnaPlugin:
 
     def _handle_get_status_task(self) -> None:
         """Handle retrieving current status for all mowers."""
+        Domoticz.Debug("Retrieving current status for all mowers.")
         if self.husqvarna_api: 
             if self.husqvarna_api.get_mowers_info():
                 self.system_retries = 0
@@ -638,21 +657,20 @@ class HusqvarnaPlugin:
         Args:
             mower: Dictionary with mower information
         """
+        Domoticz.Debug(f'Status information received from Husqvarna Cloud: {mower}')
+
+        # Name of mower
         mower_name = mower['name']
-        
-        # Create devices if they don't exist
-        if not Devices.get(mower_name, None):
-            self._create_mower_devices(mower_name)
-        
+                
         # Determine image based on mower state
-        image = Images[ImageIdentifier.OFF.value].ID if mower.get('state') == 'OFF' else Images[ImageIdentifier.STANDARD.value].ID
+        image = Images[ImageIdentifier.OFF.value].ID if mower.get('state') == Husqvarna.State.OFF.name else Images[ImageIdentifier.STANDARD.value].ID
         
         # Update state text
         state_text = self._format_state_text(mower)
         update_device(False, Devices, mower_name, UnitId.STATE, 0, state_text, Image=image)
         
         # Update running status
-        if mower.get('activity') in ['LEAVING', 'MOWING', 'CHARGING', 'GOING_HOME']:
+        if mower.get('activity') in [Husqvarna.Activity.LEAVING.name, Husqvarna.Activity.MOWING.name, Husqvarna.Activity.CHARGING.name, Husqvarna.Activity.GOING_HOME.name]:
             update_device(False, Devices, mower_name, UnitId.RUN, 1, 1, Image=image, BatteryLevel=mower.get('battery_pct', 0))
         else:
             update_device(False, Devices, mower_name, UnitId.RUN, 0, 0, Image=image, BatteryLevel=mower.get('battery_pct', 0))
@@ -666,26 +684,78 @@ class HusqvarnaPlugin:
         
         # Update cutting height
         if mower.get('cutting_height'):
-            update_device(False, Devices, mower_name, UnitId.CUTTING, 2, 10 * (mower['cutting_height'] - 1), Image=image)
+            update_device(False, Devices, mower_name, UnitId.CUTTING, 2, 10*mower['cutting_height'], Image=image)
             
         # Update actions selector
-        action_image = Images[ImageIdentifier.OFF.value].ID if mower['state'] == 'OFF' else Images[ImageIdentifier.INVERSE.value].ID
-        update_device(True, Devices, mower_name, UnitId.ACTIONS, 2, 0, Image=action_image)
+        update_device(True, Devices, mower_name, UnitId.ACTIONS, 2, 10, Image=image)
+
+        # Update next schedule
+        schedule_text = self._format_next_schedule_text(mower)
+        update_device(False, Devices, mower_name, UnitId.NEXT_SCHEDULE, 0, schedule_text, Image=image)
 
     def _format_state_text(self, mower: Dict[str, Any]) -> str:
         """Format the state text based on mower state, activity, and error."""
-        error_state = mower.get('error_state')
-        state = mower.get('state')
-        activity = mower.get('activity')
+        error_state = mower.get('error_state', '')
+        state = mower.get('state', '')
+        activity = mower.get('activity', '')
+        restricted_reason = mower.get('restricted_reason', '')
+
+        state_str = getattr(Husqvarna.State, state, Husqvarna.State.UNKNOWN).value
+        activity_str = getattr(Husqvarna.Activity, activity, Husqvarna.Activity.UNKNOWN).value
+        restricted_reason_str = getattr(Husqvarna.PlannerRestrictedReason, restricted_reason, Husqvarna.PlannerRestrictedReason.NONE).value
+
+        base_str = f"{state_str}: {activity_str}" if activity != Husqvarna.Activity.NOT_APPLICABLE.name else f"{state_str}"
 
         if error_state:
-            # Ensure proper handling of potentially None or empty activity
-            activity_str = f": {activity}" if activity and activity != 'NOT_APPLICABLE' else ""
-            return f"{state}: {activity_str}\n<body><p style=\"line-height:80%;font-size:80%;\">{error_state.strip()}</p></body>"
-        elif activity == 'NOT_APPLICABLE':
-            return f"{state}"
+            return f"{base_str}\n<body><p style=\"line-height:80%;font-size:80%;\">{error_state.strip()}</p></body>"
+
         else:
-            return f"{state}: {activity}"
+            if restricted_reason:
+                return f"{base_str}\n<body><p style=\"line-height:80%;font-size:80%;\">{restricted_str}</p></body>"
+            else:
+                return base_str
+
+    def _format_next_schedule_text(self, mower: Dict[str, Any]) -> str:
+        """
+        Format the next scheduled mowing session as readable text.
+        Uses nextStartTimestamp from the Husqvarna planner API (milliseconds).
+        Note: Husqvarna API returns local time in the timestamp, not UTC.
+        utcfromtimestamp is used intentionally to avoid double timezone conversion.
+        """
+        timestamp_ms = mower.get('next_start_timestamp', None)
+        restricted_reason = mower.get('restricted_reason', '')
+
+        # Default value
+        result = 'No schedule'
+
+        # No schedule available 
+        if not timestamp_ms:
+            return result
+
+        # Schedule available
+        try:
+            # Husqvarna API provides timestamp in local time despite being milliseconds epoch.
+            # utcfromtimestamp avoids applying an additional local timezone offset.
+            slot_dt = datetime.datetime.utcfromtimestamp(timestamp_ms / 1000)
+            now = datetime.datetime.now()
+
+            if slot_dt.date() == now.date():
+                day_label = 'Today'
+            elif slot_dt.date() == (now + datetime.timedelta(days=1)).date():
+                day_label = 'Tomorrow'
+            else:
+                day_label = slot_dt.strftime('%A')
+
+            result = f'{day_label} {slot_dt.strftime("%H:%M")}'
+
+            if restricted_reason is not Husqvarna.PlannerRestrictedReason.NONE.name:
+                if ( reason_text := getattr(Husqvarna.PlannerRestrictedReason, restricted_reason, Husqvarna.PlannerRestrictedReason.NONE).value ):
+                    result += f"\n<body><p style=\"line-height:80%;font-size:80%;\">{restricted_str}</p></body>"
+
+        except Exception as e:
+            Domoticz.Debug(f"Error formatting schedule text: {e}")
+
+        return result
 
     def _determine_mower_zone(self, mower: Dict[str, Any]) -> str:
         """Determine the garden zone where the mower is located."""
@@ -736,71 +806,103 @@ class HusqvarnaPlugin:
         Args:
             mower_name: Name of the mower
         """
+        new_device_created = False
+
         # State text display
-        Domoticz.Unit(
-            DeviceID=mower_name, 
-            Unit=UnitId.STATE, 
-            Name=f"{Parameters['Name']} - {mower_name} - {DeviceText.STATE.value}", 
-            TypeName='Text', 
-            Image=Images[ImageIdentifier.STANDARD.value].ID, 
-            Used=1
-        ).Create()
+        if not get_unit(Devices, mower_name, UnitId.STATE):
+            Domoticz.Unit(
+                DeviceID=mower_name, 
+                Unit=UnitId.STATE, 
+                Name=f"{Parameters['Name']} - {mower_name} - {DeviceText.STATE.value}", 
+                TypeName='Text', 
+                Image=Images[ImageIdentifier.STANDARD.value].ID, 
+                Used=1
+            ).Create()
+            new_device_created = True
         
         # Run (On/Off) switch
-        Domoticz.Unit(
-            DeviceID=mower_name, 
-            Unit=UnitId.RUN, 
-            Name=f"{Parameters['Name']} - {mower_name} - {DeviceText.RUN.value}", 
-            Type=244, 
-            Subtype=73, 
-            Switchtype=0, 
-            Image=Images[ImageIdentifier.STANDARD.value].ID, 
-            Used=1
-        ).Create()
+        if not get_unit(Devices, mower_name, UnitId.RUN):
+            Domoticz.Unit(
+                DeviceID=mower_name, 
+                Unit=UnitId.RUN, 
+                Name=f"{Parameters['Name']} - {mower_name} - {DeviceText.RUN.value}", 
+                Type=244, 
+                Subtype=73, 
+                Switchtype=0, 
+                Image=Images[ImageIdentifier.STANDARD.value].ID, 
+                Used=1
+            ).Create()
+            new_device_created = True
         
         # Battery level
-        Domoticz.Unit(
-            DeviceID=mower_name, 
-            Unit=UnitId.BATTERY, 
-            Name=f"{Parameters['Name']} - {mower_name} - {DeviceText.BATTERY.value}", 
-            TypeName='Custom', 
-            Options={'Custom': '0;%'}, 
-            Image=Images[ImageIdentifier.STANDARD.value].ID, 
-            Used=0
-        ).Create()
+        if not get_unit(Devices, mower_name, UnitId.BATTERY):
+            Domoticz.Unit(
+                DeviceID=mower_name, 
+                Unit=UnitId.BATTERY, 
+                Name=f"{Parameters['Name']} - {mower_name} - {DeviceText.BATTERY.value}", 
+                TypeName='Custom', 
+                Options={'Custom': '0;%'}, 
+                Image=Images[ImageIdentifier.STANDARD.value].ID, 
+                Used=0
+            ).Create()
+            new_device_created = True
         
         # Location in garden
-        Domoticz.Unit(
-            DeviceID=mower_name, 
-            Unit=UnitId.LOCATION, 
-            Name=f"{Parameters['Name']} - {mower_name} - {DeviceText.LOCATION.value}", 
-            TypeName='Text', 
-            Image=Images[ImageIdentifier.STANDARD.value].ID, 
-            Used=1
-        ).Create()
+        if not get_unit(Devices, mower_name, UnitId.LOCATION):
+            Domoticz.Unit(
+                DeviceID=mower_name, 
+                Unit=UnitId.LOCATION, 
+                Name=f"{Parameters['Name']} - {mower_name} - {DeviceText.LOCATION.value}", 
+                TypeName='Text', 
+                Image=Images[ImageIdentifier.STANDARD.value].ID, 
+                Used=1
+            ).Create()
+            new_device_created = True
         
         # Cutting height selector
-        self._create_cutting_height_selector(mower_name)
+        if not get_unit(Devices, mower_name, UnitId.CUTTING):
+            self._create_cutting_height_selector(mower_name)
+            new_device_created = True
         
         # Actions selector
-        actions = f"|{HusqvarnaAction.START_6H.value}|{HusqvarnaAction.PAUSE.value}|{HusqvarnaAction.RESUME_SCHEDULE.value}|{HusqvarnaAction.PARK_UNTIL_FURTHER_NOTICE.value}|{HusqvarnaAction.PARK_UNTIL_NEXT_SCHEDULE.value}"
-        Domoticz.Unit(
-            DeviceID=mower_name, 
-            Unit=UnitId.ACTIONS, 
-            Name=f"{Parameters['Name']} - {mower_name} - {DeviceText.ACTIONS.value}", 
-            TypeName='Selector Switch', 
-            Options={
-                'LevelActions': '|'*actions.count('|'), 
-                'LevelNames': actions, 
-                'LevelOffHidden': 'false', 
-                'SelectorStyle': '1'
-            }, 
-            Image=Images[ImageIdentifier.STANDARD.value].ID, 
-            Used=1
-        ).Create()
+        start = f"{HusqvarnaAction.START.value} ({self.config.start_duration/60:.1f}h)"
+        actions = f"|(select)|{start}|{HusqvarnaAction.PAUSE.value}|{HusqvarnaAction.RESUME_SCHEDULE.value}|{HusqvarnaAction.PARK_UNTIL_FURTHER_NOTICE.value}|{HusqvarnaAction.PARK_UNTIL_NEXT_SCHEDULE.value}"
+        if not get_unit(Devices, mower_name, UnitId.ACTIONS):
+            Domoticz.Unit(
+                DeviceID=mower_name, 
+                Unit=UnitId.ACTIONS, 
+                Name=f"{Parameters['Name']} - {mower_name} - {DeviceText.ACTIONS.value}", 
+                TypeName='Selector Switch', 
+                Options={
+                    'LevelActions': '|'*actions.count('|'), 
+                    'LevelNames': actions, 
+                    'LevelOffHidden': 'true', 
+                    'SelectorStyle': '1'
+                }, 
+                Image=Images[ImageIdentifier.STANDARD.value].ID, 
+                Used=1
+            ).Create()
+            new_device_created = True
+        else:
+            # Update action list
+            Options={'LevelActions': '|'*actions.count('|'), 'LevelNames': actions, 'LevelOffHidden': 'true', 'SelectorStyle': '1' }
+            update_device(False, Devices, mower_name, UnitId.ACTIONS, None, None, Options=Options)
+
+        # Next schedule text device
+        if not get_unit(Devices, mower_name, UnitId.NEXT_SCHEDULE):
+            Domoticz.Unit(
+                DeviceID=mower_name,
+                Unit=UnitId.NEXT_SCHEDULE,
+                Name=f"{Parameters['Name']} - {mower_name} - {DeviceText.NEXT_SCHEDULE.value}",
+                TypeName='Text',
+                Image=Images[ImageIdentifier.STANDARD.value].ID,
+                Used=1
+            ).Create()
+            new_device_created = True
         
         # Set all devices as timed out until we get real data
-        timeout_device(Devices, device_id=mower_name)
+        if new_device_created: 
+            timeout_device(Devices, device_id=mower_name)
 
     def _create_cutting_height_selector(self, mower_name: str) -> None:
         """Create the cutting height selector with proper range."""
@@ -824,9 +926,9 @@ class HusqvarnaPlugin:
                 Name=f"{Parameters['Name']} - {mower_name} - {DeviceText.CUTTING.value}", 
                 TypeName='Selector Switch', 
                 Options={
-                    'LevelActions': '|' * (steps - 1), 
-                    'LevelNames': level_names, 
-                    'LevelOffHidden': 'false', 
+                    'LevelActions': '||' * (steps - 1), 
+                    'LevelNames': f'|{level_names}', 
+                    'LevelOffHidden': 'true', 
                     'SelectorStyle': '0'
                 }, 
                 Image=Images[ImageIdentifier.STANDARD.value].ID, 
@@ -841,6 +943,8 @@ class HusqvarnaPlugin:
         Args:
             task: Task information including action and mower name
         """
+        Domoticz.Debug(f"Executing mower command: {task['Action']} for {task.get('Mower_name')}.")
+
         if not self.husqvarna_api:
             Domoticz.Debug("Cannot execute command: API not initialized")
             return
@@ -868,9 +972,9 @@ class HusqvarnaPlugin:
             if action == HusqvarnaAction.START.value:
                 status = self.husqvarna_api.action_Start(mower_name, duration=1440)
                     
-            # Start mowing (6 hours)
-            elif action == HusqvarnaAction.START_6H.value:
-                status = self.husqvarna_api.action_Start(mower_name, duration=360)
+            # Start mowing (x hours)
+            elif action.startswith(HusqvarnaAction.START.value) and len(action)>len(HusqvarnaAction.START.value):
+                status = self.husqvarna_api.action_Start(mower_name, duration=self.config.start_duration)
                     
             # Park until further notice
             elif action == HusqvarnaAction.PARK_UNTIL_FURTHER_NOTICE.value:
@@ -900,18 +1004,18 @@ class HusqvarnaPlugin:
             if status is None:
                 Domoticz.Error(f"Unknown action code {action}")
             elif status:
-                self.execution_status[mower_name].status = ExecutionStatus.DONE
+                self.execution_status[mower_name].status = ExecutionStatus.DONE.value
             else:
                 Domoticz.Error(f"Error executing {action} on {mower_name}: {self.husqvarna_api.get_http_error()}")
                 timeout_device(Devices, device_id=mower_name)
-                self.execution_status[mower_name].status = ExecutionStatus.ERROR
+                self.execution_status[mower_name].status = ExecutionStatus.ERROR.value
                 
             # Request quick status update after command
             self.run_again = DomoticzConstants.MINUTE / 2
                 
         except Exception as e:
             Domoticz.Error(f"Error executing command {action} on {mower_name}: {e}")
-            self.execution_status[mower_name].status = ExecutionStatus.ERROR
+            self.execution_status[mower_name].status = ExecutionStatus.ERROR.value
 
 # Global plugin instance
 _plugin = HusqvarnaPlugin()
