@@ -88,15 +88,14 @@ def update_device(
     Returns:
         bool: True if the device was updated, False otherwise
     """
-    Domoticz.Debug(f'Update device with AlwaysUpdate={always_update}; DeviceID={device_id}; Unit={unit}; nValue={n_value}; sValue={s_value}')
-    
     # Default update flags
     _update_standard = _update_properties = _update_options = False
     
     # Get device and unit if they exist
     if not (device := devices.get(device_id)) or not (unit_obj := device.Units.get(unit)):
+        Domoticz.Debug(f'Device with DeviceID/Unit {device_id}/{unit} does not exist... No update done...')
         return False
-        
+
     # Use current values if new ones not provided
     n_value = unit_obj.nValue if n_value is None else n_value
     s_value = unit_obj.sValue if s_value is None else s_value   
@@ -111,16 +110,17 @@ def update_device(
     property_updates = {
         'Image': 'Image',
         'BatteryLevel': 'BatteryLevel',
-        'SignalLevel': 'SignalLevel'
+        'SignalLevel': 'SignalLevel',
+        'Used': 'Used'
     }
     
     for kwarg_name, property_name in property_updates.items():
-        if kwarg_name in kwargs and getattr(unit_obj, property_name) != kwargs[kwarg_name]:
+        if kwarg_name in kwargs and (kwargs[kwarg_name] is not None) and getattr(unit_obj, property_name) != kwargs[kwarg_name]:
             setattr(unit_obj, property_name, kwargs[kwarg_name])
             _update_properties = True
         
     # Update options if provided and different
-    if 'Options' in kwargs and unit_obj.Options != kwargs['Options']:
+    if 'Options' in kwargs and kwargs['Options'] and unit_obj.Options != kwargs['Options']:
         unit_obj.Options = kwargs['Options']
         _update_options = True
 
@@ -134,6 +134,8 @@ def update_device(
     if device.TimedOut:
         device.TimedOut = 0
 
+    Domoticz.Debug(f'Request to update device with AlwaysUpdate={always_update}; DeviceID={device_id}; Unit={unit}; nValue={n_value}; sValue={s_value}; others={kwargs}. Updates done: standard={_update_standard}, properties={_update_properties}, options={_update_options}. Seconds since last update: {seconds_since_last_update(devices, device_id, unit)}')
+        
     return _update_standard or _update_properties or _update_options
 
 
@@ -180,15 +182,15 @@ def check_activity_units_and_timeout(
         # Check all devices
         for device_name, device in devices.items():
             for unit_number, unit in device.Units.items():
-                if seconds_since_last_update(devices, device.DeviceID, unit_number) > seconds_last_update_required:
+                if unit.Used and (sec := seconds_since_last_update(devices, device.DeviceID, unit_number)) > seconds_last_update_required:
                     timeout_device(devices, device_id=device.DeviceID)
-                    timed_out_devices.append(unit.Name)
+                    timed_out_devices.append({'Name': unit.Name, 'Seconds': sec})
     elif device := devices.get(device_id):
         # Check specified device
         for unit_number, unit in device.Units.items():
-            if seconds_since_last_update(devices, device_id, unit_number) > seconds_last_update_required:
+            if unit.Used and (sec := seconds_since_last_update(devices, device_id, unit_number)) > seconds_last_update_required:
                 timeout_device(devices, device_id=device_id)
-                timed_out_devices.append(unit.Name)
+                timed_out_devices.append({'Name': unit.Name, 'Seconds': sec})
                 
     return timed_out_devices
 
@@ -252,7 +254,9 @@ def get_unit(devices: DeviceCollection, device_id: str, unit: int) -> Any:
     Returns:
         Any: The unit object or None if not found
     """
-    return devices.get(device_id, {}).Units.get(unit)
+    if (device := devices.get(device_id)) and (unit_obj := device.Units.get(unit)):
+        return unit_obj
+    return None
 
 
 def seconds_since_last_update(devices: DeviceCollection, device_id: str, unit: int) -> Optional[float]:
@@ -270,6 +274,30 @@ def seconds_since_last_update(devices: DeviceCollection, device_id: str, unit: i
     if (device := devices.get(device_id)) and (unit_obj := device.Units.get(unit)):
         if last_update_time := date_string_to_datetime(unit_obj.LastUpdate):
             return (datetime.now() - last_update_time).total_seconds()
+    return None
+
+
+def seconds_difference_last_update(devices: DeviceCollection, device_id_1: str, unit_1: int, device_id_2: str, unit_2: int) -> Optional[float]:
+    """
+    Difference in last update between 2 devices/units.
+    
+    Args:
+        devices: Dictionary of devices
+        device_id_1: ID of the first device
+        unit_1: Unit number within the first device
+        device_id_2: ID of the second device
+        unit_2: Unit number within the second device
+        
+    Returns:
+        Optional[float]: Seconds since last update or None if device not found
+    """
+    if ( (device_1 := devices.get(device_id_1)) and (unit_obj_1 := device_1.Units.get(unit_1)) and
+         (device_2 := devices.get(device_id_2)) and (unit_obj_2 := device_2.Units.get(unit_2))
+       ):
+        if ( (last_update_time_1 := date_string_to_datetime(unit_obj_1.LastUpdate)) and
+             (last_update_time_2 := date_string_to_datetime(unit_obj_2.LastUpdate))
+           ):
+            return abs((last_update_time_1 - last_update_time_2).total_seconds())
     return None
 
 
@@ -334,6 +362,7 @@ def set_config_item_db(key: Optional[str] = None, value: Any = None) -> Dict[str
     Returns:
         Dict[str, Any]: The updated configuration
     """
+    config = {}
     try:
         config = Domoticz.Configuration()
         # Set specific key or entire config
@@ -341,10 +370,10 @@ def set_config_item_db(key: Optional[str] = None, value: Any = None) -> Dict[str
             config[key] = value
         else:
             config = value
-        return Domoticz.Configuration(config)
+        config = Domoticz.Configuration(config)
     except Exception as inst:
         Domoticz.Error(f'Domoticz.Configuration operation failed: {inst}')
-        return {}
+    return config
 
 
 def erase_config_item_db(key: Optional[str] = None) -> Dict[str, Any]:
@@ -357,6 +386,7 @@ def erase_config_item_db(key: Optional[str] = None) -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: The updated configuration
     """
+    config = {}
     try:
         config = Domoticz.Configuration()
         # Delete specific key or clear all
@@ -364,10 +394,10 @@ def erase_config_item_db(key: Optional[str] = None) -> Dict[str, Any]:
             del config[key]
         else:
             config.clear()
-        return Domoticz.Configuration(config)
+        config = Domoticz.Configuration(config)
     except Exception as inst:
         Domoticz.Error(f'Domoticz.Configuration operation failed: {inst}')
-        return {}
+    return config
 
 
 def get_distance(origin: Tuple[float, float], destination: Tuple[float, float], unit: str = 'km') -> float:
@@ -468,10 +498,61 @@ def log_backtrace_error(parameters: Dict[str, str]) -> None:
     from pathlib import Path
     log_path = Path(parameters['HomeFolder']) / f"{parameters['Name']}_traceback.txt"
     with log_path.open("a") as myfile:
-        myfile.write(f'-General Error-{datetime.datetime.now()}------------------\n')
+        myfile.write(f'-General Error-{datetime.now()}------------------\n')
         myfile.write(f'{traceback.format_exc()}')
         myfile.write('---------------------------------\n')
 
+def smart_convert_string(item: str) -> any:
+    """Tries to convert a string to int, then float, otherwise returns the original string."""
+
+    if not isinstance(item, str):
+        return item  # Return non-strings as is
+    try:
+        # Check for integer (must be first, as int("3.0") will fail)
+        return int(item)
+    except ValueError:
+        try:
+            # Check for float (e.g., "3.14" or "3.0")
+            return float(item)
+        except ValueError:
+            # Check boolean
+            if item.lower() == 'false':
+                return False
+            elif item.lower() == 'true':
+                return True
+            else:
+                # Keep as string if conversion fails
+                return item
+
+def get_system_timezone() -> str:
+    """
+    Try to get IANA-name of the local timezone from Linux.
+    """
+    import os
+    tz_name: str = os.environ.get('TZ', "")
+    if tz_name and '/' in tz_name: # Controleer op IANA-formaat
+        return tz_name
+    # Fallback
+    return "Europe/Brussels" 
+
+def convert_utc_to_local(utc_time_str: str) -> str:
+    """
+    Convert ISO-8601 UTC-time string to local timezone string
+    """
+    import pytz
+    target_timezone_name: str = get_system_timezone()
+        
+    # 1. Get local timezone
+    local_tz: pytz.BaseTzInfo = pytz.timezone(target_timezone_name)
+
+    # 2. Parse UTC-string
+    utc_dt: datetime = datetime.fromisoformat(utc_time_str.replace('Z', '+00:00'))
+
+    # 3. Convert to local timezone
+    local_dt: datetime = utc_dt.astimezone(local_tz)
+
+    # 4. Format to HH:MM
+    return local_dt.strftime("%H:%M")
 
 # Constants for backward compatibility
 TIMEDOUT = DomoticzConstants.TIMEDOUT
@@ -504,7 +585,7 @@ __all__ = [
     'get_device_n_value', 'get_unit', 'seconds_since_last_update',
     'date_string_to_datetime', 'get_config_item_db', 'set_config_item_db',
     'erase_config_item_db', 'get_distance', 'average', 'domoticz_api',
-    'log_backtrace_error',
+    'log_backtrace_error', 'smart_convert_string', 'convert_utc_to_local',
     
     # Aliases for backward compatibility
     'DumpConfigToLog', 'UpdateDevice', 'TimeoutDevice',
