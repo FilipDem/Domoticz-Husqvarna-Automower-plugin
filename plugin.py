@@ -722,8 +722,9 @@ class HusqvarnaPlugin:
         Note: Husqvarna API returns local time in the timestamp, not UTC.
         utcfromtimestamp is used intentionally to avoid double timezone conversion.
         """
-        timestamp_ms = mower.get('next_start_timestamp', None)
-        restricted_reason = mower.get('restricted_reason', '')
+        planner = mower.get('planner', {})
+        timestamp_ms = planner.get('next_start_timestamp', None)
+        restricted_reason = planner.get('restricted_reason', '')
 
         # Default value
         result = 'No schedule'
@@ -750,7 +751,7 @@ class HusqvarnaPlugin:
 
             if restricted_reason is not Husqvarna.PlannerRestrictedReason.NONE.name:
                 if ( reason_text := getattr(Husqvarna.PlannerRestrictedReason, restricted_reason, Husqvarna.PlannerRestrictedReason.NONE).value ):
-                    result += f"\n<body><p style=\"line-height:80%;font-size:80%;\">{restricted_str}</p></body>"
+                    result += f"\n<body><p style=\"line-height:80%;font-size:80%;\">{reason_text}</p></body>"
 
         except Exception as e:
             Domoticz.Debug(f"Error formatting schedule text: {e}")
@@ -760,7 +761,7 @@ class HusqvarnaPlugin:
     def _determine_mower_zone(self, mower: Dict[str, Any]) -> str:
         """Determine the garden zone where the mower is located."""
         location_data = mower.get('location')
-        if location_data and location_data.get('latitude') is not None and location_data.get('longitude') is not None:
+        if location_data and location_data.get('latitude', None) is not None and location_data.get('longitude', None) is not None:
             # Pass only the necessary parts of location to _find_nearest_zone
             return self._find_nearest_zone({'latitude': location_data['latitude'], 'longitude': location_data['longitude']})
         else:
