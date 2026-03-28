@@ -759,7 +759,14 @@ class HusqvarnaPlugin:
         return result
 
     def _determine_mower_zone(self, mower: Dict[str, Any]) -> str:
-        """Determine the garden zone where the mower is located."""
+        """
+        Determine the garden zone where the mower is located.
+        When the mower is in its base, this is returned as location.
+        """
+        activity = mower.get('activity', '')
+        if activity in (Husqvarna.Activity.CHARGING.name, Husqvarna.Activity.PARKED_IN_CS.name):
+            return Husqvarna.Activity.PARKED_IN_CS.value
+
         location_data = mower.get('location')
         if location_data and location_data.get('latitude', None) is not None and location_data.get('longitude', None) is not None:
             # Pass only the necessary parts of location to _find_nearest_zone
