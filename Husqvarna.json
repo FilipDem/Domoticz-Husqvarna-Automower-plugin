@@ -1,0 +1,9 @@
+{
+"height_min_max (cm)": {"min": 2, "max": 6, "steps": 5},
+"update_interval (min)": { "off": 60, "cloud_error": 180, "quota_error": 30 },
+"start_duration (min)": 120,
+"night_mode": { "start": 22, "end": 6, "interval": 60 },
+"zones": [
+    {"name": "Tuin", "latitude": 51.8316, "longitude": 4.1243}
+    ]
+}

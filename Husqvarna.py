@@ -11,7 +11,7 @@ Based on the official Husqvarna API:
 https://developer.husqvarnagroup.cloud/
 
 Author: Filip Demaertelaere
-Version: 2.1.2
+Version: 2.0.0
 """
 
 import time
@@ -52,7 +52,7 @@ class ApiEndpoints:
 class ApiConfig:
     """Configuration values for API communication."""
     RETRY_DELAY = 2             # Seconds between API calls for retries
-    TIMEOUT = 5                 # Seconds for connection and read timeout
+    TIMEOUT = 8                 # Seconds for connection and read timeout
     TOKEN_REFRESH_MARGIN = 600  # Seconds before token expiration to refresh
 
 class HttpMethod(Enum):
@@ -68,13 +68,6 @@ class MowerAction(str, Enum):
     START = 'Start'
     PAUSE = 'Pause'
 
-class MowerState(str, Enum):
-    """Possible states of the mower."""
-    OFF = 'OFF'
-    OK = 'OK'
-    ERROR = 'ERROR'
-    WARNING = 'WARNING'
-
 @dataclass
 class ApiState:
     """State information for API communication."""
@@ -85,10 +78,57 @@ class ApiState:
     api_limit_reached: bool = False
     authenticated: bool = False
 
+class Activity(Enum):
+    """ 
+    Human-readable labels for mower activities (shared across methods). 
+    https://developer.husqvarnagroup.cloud/apis/automower-connect-api?tab=status%20description%20and%20error%20codes
+    """
+    UNKNOWN = 'Unknown'
+    NOT_APPLICABLE = 'Not applicable'
+    MOWING = 'Mowing'
+    GOING_HOME = 'Going home'
+    CHARGING = 'Charging'
+    LEAVING = 'Leaving base'
+    PARKED_IN_CS = 'Parked in base'
+    STOPPED_IN_GARDEN = 'Stopped in garden'
+
+class State(Enum):
+    """ Human-readable labels for mower states (shared across methods).
+    https://developer.husqvarnagroup.cloud/apis/automower-connect-api?tab=status%20description%20and%20error%20codes
+    """
+    UNKNOWN = 'Unknown'
+    NOT_APPLICABLE = ''
+    PAUSED = 'Pauzed'
+    IN_OPERATION = 'In operation'
+    WAIT_UPDATING = 'Updating firmware'
+    WAIT_POWER_UP = 'Power-up testing'
+    RESTRICTED = 'Not mowing'
+    OFF = 'Switched off'
+    STOPPED = 'Stopped'
+    ERROR = 'Error'
+    FATAL_ERROR = 'Fatal error'
+    ERROR_AT_POWER_UP = 'Error at power-up'
+
+class PlannerRestrictedReason(Enum):
+    """ Human-readable labels for mower restricted reasons when using the planner.
+    https://developer.husqvarnagroup.cloud/apis/automower-connect-api?tab=openapi
+    """
+    NONE = None
+    WEEK_SCHEDULE = None
+    PARK_OVERRIDE = 'Parked (override)'
+    SENSOR = 'Grass too short'
+    DAILY_LIMIT = 'Daily mowering limit reached'
+    FOTA = 'Updating firmware'
+    FROST = 'Frost protection'
+    ALL_WORK_AREAS_COMPLETED = 'All areas completed'
+    EXTERNAL = 'External reason'
+    WORK_AREA_ABANDONED = 'Areas could not be completed'
+
 class ErrorCodes:
     """
     Error codes dictionary for Husqvarna mowers.
     Maps numeric error codes to human-readable descriptions.
+    https://developer.husqvarnagroup.cloud/apis/automower-connect-api?tab=status%20description%20and%20error%20codes
     """
     CODES = {
         0:    'Unexpected error',
@@ -171,7 +211,7 @@ class ErrorCodes:
         77:   'Com board not available',
         78:   'Slipped - Mower has Slipped.Situation not solved with moving pattern',
         79:   'Invalid battery combination - Invalid combination of different battery types.',
-        80:   'Cutting system imbalance  Warning',
+        80:   'Cutting system imbalance',
         81:   'Safety function faulty',
         82:   'Wheel motor blocked, rear right',
         83:   'Wheel motor blocked, rear left',
@@ -265,7 +305,6 @@ class Husqvarna:
         self.client_secret = client_secret
         self.mowers: List[Dict[str, Any]] = []
         self.state = ApiState()
-        self.stop_event = None
         self.session = self._create_session()
         self.state.authenticated = self._get_access_token()
 
@@ -275,7 +314,7 @@ class Husqvarna:
         Returns:
             bool: True if authenticated, False otherwise
         """
-        log(f'Husqvarna object returns {self.state.authenticated}.')
+        # log(f'Husqvarna object returns {self.state.authenticated}.')
         return self.state.authenticated
 
     def __enter__(self) -> 'Husqvarna':
@@ -493,7 +532,7 @@ class Husqvarna:
         else:
             mower = self.get_mower_from_name(name_or_mower)
         if mower:
-            return mower.get('state') == MowerState.OFF.value
+            return mower.get('state') == State.OFF.name
         return None
 
     def are_all_mowers_off(self) -> bool:
@@ -503,7 +542,7 @@ class Husqvarna:
             bool: True if all mowers are off, False otherwise
         """
         return all(
-            mower.get('state') == MowerState.OFF.value
+            mower.get('state') == State.OFF.name
             for mower in self.mowers
         )
 
@@ -519,14 +558,7 @@ class Husqvarna:
         """Close the HTTP session."""
         if self.session:
             self.session.close()
-
-    def set_stop_event(self, stop_event) -> None:
-        """
-        Pass a threading.Event so _http_with_retry can abort retries immediately on plugin stop.
-        Args:
-            stop_event: threading.Event that is set when the plugin is stopping
-        """
-        self.stop_event = stop_event
+            self.session = None
 
     def get_http_error(self) -> Optional[str]:
         """
@@ -581,7 +613,7 @@ class Husqvarna:
                 'accept': 'application/vnd.api+json'
             })
             
-            log(f"New access token generated! Expiration: {self.state.access_token_expiration} - "
+            log(f"New access token generated! Expiration: {datetime.now() + timedelta(seconds=response.get('expires_in', 0))} - "
                 f"Type: {response.get('token_type', '')} - Token: ...{response.get('access_token', 'N/A')[-20:]}.")
                 
             return True
@@ -674,17 +706,16 @@ class Husqvarna:
                     # Settings
                     self.mowers[index]['cutting_height'] = attributes.get('settings', {}).get('cuttingHeight', 0)
 
-                    # Schedule information (used by plugin for 'Next Schedule' device)
-                    # Schedule information (used by plugin for 'Next Schedule' device)
+                    # Schedule information
                     planner = attributes.get('planner', {})
-                    self.mowers[index]['schedules'] = None  # tasks-based schedules not used
-                    self.mowers[index]['next_start_timestamp'] = planner.get('nextStartTimestamp')
-                    self.mowers[index]['restricted_reason'] = planner.get('restrictedReason')
+                    self.mowers[index]['planner'] = {}
+                    self.mowers[index]['planner']['next_start_timestamp'] = planner.get('nextStartTimestamp')
+                    self.mowers[index]['planner']['restricted_reason'] = planner.get('restrictedReason')
                     
                     # Error information
                     try:
                         error_code = attributes.get('mower', {}).get('errorCode')
-                        if self.mowers[index].get('state') == MowerState.ERROR.value and error_code is not None:
+                        if self.mowers[index].get('state') in [State.ERROR.name, State.FATAL_ERROR.name, State.ERROR_AT_POWER_UP.name] and error_code is not None:
                             self.mowers[index]['error_state'] = ErrorCodes.get_description(error_code)
                         else:
                             self.mowers[index]['error_state'] = None
@@ -841,11 +872,10 @@ class Husqvarna:
         response = None
 
         while retry_counter < 3:
-            # Abort immediately if plugin is stopping
-            if self.stop_event and self.stop_event.is_set():
-                log('Stop event set, aborting HTTP retry loop.')
-                self.state.error = 'Aborted: plugin is stopping.'
-                return None
+
+            # Be sure plugin is not stopping
+            if self.session is None:
+                break
 
             try:
                 # Make the request
@@ -908,13 +938,13 @@ class Husqvarna:
                 if retry_counter >= 3:
                     break
 
-            # Wait before retrying - interrupteerbaar via stop_event
+            # Wait before retrying
             if retry_counter < 3 and not execution_status:
-                wait_seconds = ApiConfig.RETRY_DELAY * (retry_counter + 1)
-                if self.stop_event:
-                    self.stop_event.wait(timeout=wait_seconds)
-                else:
-                    time.sleep(wait_seconds)
+                stop_time = time.time() + ApiConfig.RETRY_DELAY * (retry_counter + 1)
+                while time.time() < stop_time:
+                    if self.session is None:
+                        break
+                    time.sleep(0.1)
 
         # Return parsed JSON response if successful
         if execution_status and response is not None:
@@ -924,6 +954,8 @@ class Husqvarna:
                 log(f"Error parsing JSON response: {e}")
                 self.state.error = f"Error parsing JSON response: {e}"
                 return None
+
+        # End
         return None
 
 
